@@ -329,47 +329,97 @@ validator_download_sudod() {
     return 1
   fi
   echo "==> sudod ready: $dest" >&2
-  validator_install_sudod_systemwide "$dest" || true
+  validator_install_sudod_systemwide "$dest" "$repo_root" || true
   return 0
 }
 
 validator_install_sudod_systemwide() {
   local dest="${1:?}"
-  local system_bin="/usr/local/bin/sudod"
+  local repo_root="${2:-}"
+  local real_bin="${SUDO_LIB_DIR}/sudod-bin"
+  local wrapper="/usr/local/bin/sudod"
+  local lib_paths="${SUDO_LIB_DIR}"
+  [[ -n "$repo_root" && -d "$repo_root/build/lib" ]] && lib_paths="${repo_root}/build/lib:${lib_paths}"
+
   [[ -f "$dest" ]] || return 1
-  if [[ -w /usr/local/bin ]]; then
-    cp -f "$dest" "$system_bin"
-    chmod +x "$system_bin"
+  sudo mkdir -p "${SUDO_LIB_DIR}" /usr/local/bin 2>/dev/null || mkdir -p "${SUDO_LIB_DIR}" /usr/local/bin 2>/dev/null || true
+
+  if [[ -w "${SUDO_LIB_DIR}" ]]; then
+    cp -f "$dest" "$real_bin"
+    chmod 755 "$real_bin"
   elif command -v sudo >/dev/null 2>&1; then
-    sudo cp -f "$dest" "$system_bin"
-    sudo chmod +x "$system_bin"
+    sudo cp -f "$dest" "$real_bin"
+    sudo chmod 755 "$real_bin"
   else
+    real_bin="$dest"
+  fi
+
+  local wrap_tmp
+  wrap_tmp="$(mktemp)"
+  cat >"$wrap_tmp" <<EOF
+#!/usr/bin/env bash
+export LD_LIBRARY_PATH="${lib_paths}\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+exec "${real_bin}" "\$@"
+EOF
+  chmod 755 "$wrap_tmp"
+  if [[ -w /usr/local/bin ]]; then
+    mv -f "$wrap_tmp" "$wrapper"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo mv -f "$wrap_tmp" "$wrapper"
+    sudo chmod 755 "$wrapper"
+  else
+    rm -f "$wrap_tmp"
     return 0
   fi
+}
+
+validator_self_update() {
+  local root="${1:?}"
+  [[ "${VALIDATOR_SKIP_GIT_PULL:-0}" == "1" ]] && return 1
+  [[ -d "$root/.git" ]] || return 1
+  command -v git >/dev/null 2>&1 || return 1
+  echo "==> Pulling latest Validator scripts..." >&2
+  git -C "$root" fetch origin main -q 2>/dev/null || return 1
+  local local_rev remote_rev
+  local_rev="$(git -C "$root" rev-parse HEAD 2>/dev/null || echo "")"
+  remote_rev="$(git -C "$root" rev-parse origin/main 2>/dev/null || echo "")"
+  [[ -n "$local_rev" && -n "$remote_rev" && "$local_rev" != "$remote_rev" ]] || return 1
+  git -C "$root" merge --ff-only origin/main -q 2>/dev/null \
+    || git -C "$root" pull --ff-only origin main -q 2>/dev/null || return 1
+  echo "    Updated: ${local_rev:0:7} -> ${remote_rev:0:7}" >&2
+  return 0
+}
+
+validator_sudod_runnable() {
+  local bin="${1:?}"
+  "$bin" version >/dev/null 2>&1 || "$bin" --help >/dev/null 2>&1
 }
 
 validator_ensure_sudod_binary() {
   local repo_root="${1:?}"
   local binary="${SUDOD_BIN:-$repo_root/build/sudod}"
-  local system_bin="/usr/local/bin/sudod"
+  local wrapper="/usr/local/bin/sudod"
 
+  validator_download_wasmvm_lib "$repo_root" "$repo_root/build/lib" 2>/dev/null || true
   validator_setup_lib_path "$repo_root"
+
+  if [[ -f "$wrapper" && -x "$wrapper" ]] && validator_sudod_runnable "$wrapper"; then
+    printf '%s\n' "$wrapper"
+    return 0
+  fi
 
   if [[ -n "${SUDOD_BIN:-}" && -f "$SUDOD_BIN" ]] \
     && validator_verify_sudod_file "$SUDOD_BIN" 2>/dev/null; then
+    validator_install_sudod_systemwide "$SUDOD_BIN" "$repo_root" || true
+    [[ -f "$wrapper" ]] && printf '%s\n' "$wrapper" && return 0
     printf '%s\n' "$SUDOD_BIN"
     return 0
   fi
 
-  if [[ -f "$system_bin" ]] && validator_verify_sudod_file "$system_bin" 2>/dev/null; then
-    printf '%s\n' "$system_bin"
-    return 0
-  fi
-
   if [[ -f "$binary" ]] && validator_verify_sudod_file "$binary" 2>/dev/null; then
-    validator_install_sudod_systemwide "$binary" || true
-    if [[ -f "$system_bin" ]]; then
-      printf '%s\n' "$system_bin"
+    validator_install_sudod_systemwide "$binary" "$repo_root" || true
+    if [[ -f "$wrapper" ]]; then
+      printf '%s\n' "$wrapper"
     else
       printf '%s\n' "$binary"
     fi
@@ -382,9 +432,9 @@ validator_ensure_sudod_binary() {
       || return 1
     validator_build_sudod "$chain_root" "$binary" || return 1
     validator_download_wasmvm_lib "$repo_root" "$repo_root/build/lib" || true
-    validator_install_sudod_systemwide "$binary" || true
-    if [[ -f "$system_bin" ]]; then
-      printf '%s\n' "$system_bin"
+    validator_install_sudod_systemwide "$binary" "$repo_root" || true
+    if [[ -f "$wrapper" ]]; then
+      printf '%s\n' "$wrapper"
     else
       printf '%s\n' "$binary"
     fi
@@ -393,8 +443,8 @@ validator_ensure_sudod_binary() {
 
   validator_download_sudod "$repo_root" "$binary" || return 1
   validator_setup_lib_path "$repo_root"
-  if [[ -f "$system_bin" ]]; then
-    printf '%s\n' "$system_bin"
+  if [[ -f "$wrapper" ]]; then
+    printf '%s\n' "$wrapper"
   else
     printf '%s\n' "$binary"
   fi

@@ -203,6 +203,10 @@ setup_node() {
 
 main() {
   parse_args "$@"
+  if [[ "${VALIDATOR_UPDATED:-0}" != "1" ]] && validator_self_update "$ROOT_DIR"; then
+    export VALIDATOR_UPDATED=1
+    exec "$ROOT_DIR/scripts/join-validator.sh" "$@"
+  fi
   validator_load_network_defaults "$ROOT_DIR"
   validator_open_firewall
   validator_load_deploy_env "$ROOT_DIR"
