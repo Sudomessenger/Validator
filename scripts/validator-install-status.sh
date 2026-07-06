@@ -62,7 +62,6 @@ chain_root="$REPO_ROOT"
 sudod_candidates=(
   "${SUDOD_BIN:-}"
   "$REPO_ROOT/build/sudod"
-  "$REPO_ROOT/.chain/network/sudo-chain/build/sudod"
 )
 SUDOD=""
 for candidate in "${sudod_candidates[@]}"; do

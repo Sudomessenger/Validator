@@ -10,8 +10,7 @@ REPO_ROOT="${REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/validator-common.sh"
 
 VALIDATOR_HOME="${VALIDATOR_HOME:-/opt/sudo-validator}"
-CHAIN_ROOT="$(validator_resolve_chain_root "$ROOT_DIR")"
-BINARY="$(validator_find_sudod_binary "$CHAIN_ROOT" "$REPO_ROOT")"
+BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR")"
 
 validator_load_network_defaults "$REPO_ROOT"
 

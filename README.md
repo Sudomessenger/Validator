@@ -25,8 +25,8 @@ Validators earn **transaction gas fees** (not mining rewards). When your validat
 
 ### What this repo does
 
-1. Installs system dependencies (Go, build tools, jq, curl)
-2. Clones the [SUDO chain source](https://github.com/Sudomessenger/network) and builds `sudod`
+1. Installs system dependencies (jq, curl, python3)
+2. Downloads pre-built `sudod` from GitHub Release (**no network repo**)
 3. Fetches live genesis from the network
 4. Configures P2P peers and opens firewall ports
 5. Creates or imports your validator wallet
@@ -134,7 +134,7 @@ bash scripts/validator-install-status.sh
 bash install-validator.sh --status
 ```
 
-First run builds `sudod` from the SUDO chain source (5–15 minutes). The chain source is cloned to `.chain/network/` automatically.
+First run downloads pre-built `sudod` from GitHub Release (~90 MB, 1–3 min). **No `network` repo needed.**
 
 ---
 

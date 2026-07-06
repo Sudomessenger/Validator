@@ -16,8 +16,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/lib/validator-common.sh"
-CHAIN_ROOT="$(validator_resolve_chain_root "$ROOT_DIR" 2>/dev/null || echo "$ROOT_DIR")"
-BINARY="${SUDOD_BIN:-$CHAIN_ROOT/build/sudod}"
+validator_load_network_defaults "$ROOT_DIR"
+BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR")"
 CHAIN_ID="${CHAIN_ID:-sudo99}"
 VALIDATOR_HOME="${VALIDATOR_HOME:-/opt/sudo-validator}"
 MONIKER="${MONIKER:-sudo-validator}"
@@ -48,8 +48,7 @@ cmd_setup() {
   fi
 
   if [[ ! -x "$BINARY" ]]; then
-    echo "==> Building sudod..."
-    validator_build_sudod "$CHAIN_ROOT" "$BINARY"
+    die "sudod not found — run join-validator.sh or scripts/download-sudod.sh"
   fi
 
   info "Initializing node (home=$VALIDATOR_HOME, moniker=$MONIKER)..."

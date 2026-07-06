@@ -3,11 +3,78 @@
 
 set -euo pipefail
 
-# Validator repo layout: chain source lives in .chain/network/sudo-chain (cloned on demand).
+# Standalone Validator repo — sudod comes from pre-built download (not network.git).
+# Optional source build: SUDO_BUILD_FROM_SOURCE=1 + SUDO_CHAIN_SRC or GITHUB_TOKEN.
 SUDO_CHAIN_REPO_URL="${SUDO_CHAIN_REPO_URL:-https://github.com/Sudomessenger/network.git}"
 SUDO_CHAIN_REF="${SUDO_CHAIN_REF:-main}"
+SUDOD_DOWNLOAD_URL="${SUDOD_DOWNLOAD_URL:-https://github.com/Sudomessenger/Validator/releases/download/v1.0.0/sudod-linux-amd64}"
 
-# Build clone URL — Sudomessenger/network is private; set GITHUB_TOKEN on deploy worker/VPS.
+validator_download_sudod() {
+  local repo_root="${1:?}"
+  local dest="${2:-$repo_root/build/sudod}"
+  local url="${SUDOD_DOWNLOAD_URL:-}"
+  local tmp="${dest}.download"
+
+  [[ -n "$url" ]] || {
+    validator_load_network_defaults "$repo_root"
+    url="${SUDOD_DOWNLOAD_URL:-}"
+  }
+  [[ -n "$url" ]] || {
+    echo "ERROR: SUDOD_DOWNLOAD_URL not set." >&2
+    return 1
+  }
+
+  echo "==> Downloading pre-built sudod..."
+  echo "    URL: $url"
+  mkdir -p "$(dirname "$dest")"
+  rm -f "$tmp"
+  if ! curl -fsSL --connect-timeout 120 --retry 3 --retry-delay 5 "$url" -o "$tmp"; then
+    rm -f "$tmp"
+    echo "ERROR: sudod download failed from $url" >&2
+    return 1
+  fi
+  mv "$tmp" "$dest"
+  chmod +x "$dest"
+  if ! "$dest" version >/dev/null 2>&1 && ! "$dest" --help >/dev/null 2>&1; then
+    echo "ERROR: downloaded file is not a valid sudod binary." >&2
+    rm -f "$dest"
+    return 1
+  fi
+  echo "==> sudod ready: $dest"
+  return 0
+}
+
+validator_ensure_sudod_binary() {
+  local repo_root="${1:?}"
+  local binary
+  binary="$(validator_find_sudod_binary "$repo_root" "$repo_root")"
+
+  if [[ -x "$binary" && "$binary" != "$repo_root/build/sudod" ]] || \
+     { [[ -x "$binary" ]] && "$binary" version >/dev/null 2>&1; }; then
+    echo "$binary"
+    return 0
+  fi
+
+  binary="${SUDOD_BIN:-$repo_root/build/sudod}"
+  if [[ -x "$binary" ]] && "$binary" version >/dev/null 2>&1; then
+    echo "$binary"
+    return 0
+  fi
+
+  if [[ "${SUDO_BUILD_FROM_SOURCE:-0}" == "1" ]]; then
+    local chain_root
+    chain_root="$(validator_ensure_chain_source "$repo_root")" \
+      || return 1
+    validator_build_sudod "$chain_root" "$binary" || return 1
+    echo "$binary"
+    return 0
+  fi
+
+  validator_download_sudod "$repo_root" "$binary" || return 1
+  echo "$binary"
+}
+
+# Legacy / optional — only when SUDO_BUILD_FROM_SOURCE=1
 validator_git_clone_url() {
   local base="${1:-$SUDO_CHAIN_REPO_URL}"
   base="${base%.git}"
@@ -87,14 +154,13 @@ validator_ensure_chain_source() {
 validator_resolve_chain_root() {
   local root="${1:?}"
   for candidate in \
-    "$root" \
+    "${SUDO_CHAIN_SRC:-}" \
     "$root/sudo-chain" \
     "$root/.chain/network/sudo-chain" \
     "$root/../network/sudo-chain"; do
-    if [[ -f "$candidate/go.mod" ]]; then
-      echo "$candidate"
-      return 0
-    fi
+    [[ -n "$candidate" && -f "$candidate/go.mod" ]] || continue
+    echo "$candidate"
+    return 0
   done
   validator_ensure_chain_source "$root"
 }
@@ -477,23 +543,32 @@ validator_detect_public_ip() {
 
 validator_install_deps() {
   local need_apt=0
-  for cmd in python3 jq curl git gcc make; do
+  for cmd in python3 jq curl; do
     command -v "$cmd" >/dev/null 2>&1 || need_apt=1
   done
   if [[ "$need_apt" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
-    echo "==> Installing system dependencies (build-essential, make, git, jq, curl)..."
+    echo "==> Installing system dependencies (jq, curl, python3)..."
     sudo apt-get update -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-      build-essential make git jq curl python3 ca-certificates >/dev/null 2>&1 \
+      jq curl python3 ca-certificates >/dev/null 2>&1 \
       || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        build-essential make git jq curl python3 ca-certificates
+        jq curl python3 ca-certificates
   fi
-  if ! command -v go >/dev/null 2>&1; then
-    if [[ ! -x /usr/local/go/bin/go ]]; then
-      echo "==> Installing Go 1.22..."
-      curl -fsSL https://go.dev/dl/go1.22.7.linux-amd64.tar.gz | sudo tar -C /usr/local -xz
+  if [[ "${SUDO_BUILD_FROM_SOURCE:-0}" == "1" ]]; then
+    for cmd in git gcc make; do
+      command -v "$cmd" >/dev/null 2>&1 || need_apt=1
+    done
+    if [[ "$need_apt" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        build-essential make git >/dev/null 2>&1 || true
     fi
-    export PATH="$PATH:/usr/local/go/bin"
+    if ! command -v go >/dev/null 2>&1; then
+      if [[ ! -x /usr/local/go/bin/go ]]; then
+        echo "==> Installing Go 1.22 (source build mode)..."
+        curl -fsSL https://go.dev/dl/go1.22.7.linux-amd64.tar.gz | sudo tar -C /usr/local -xz
+      fi
+      export PATH="$PATH:/usr/local/go/bin"
+    fi
   fi
 }
 

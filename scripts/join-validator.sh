@@ -196,23 +196,18 @@ main() {
   parse_args "$@"
   validator_load_network_defaults "$ROOT_DIR"
   validator_open_firewall
-  CHAIN_ROOT="$(validator_resolve_chain_root "$ROOT_DIR")" \
-    || die "Could not resolve SUDO chain source. Check git/network access or set SUDO_CHAIN_SRC."
   validator_load_deploy_env "$ROOT_DIR"
-  BINARY="$(validator_find_sudod_binary "$CHAIN_ROOT" "$ROOT_DIR")"
+  BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR")" \
+    || die "Could not get sudod binary. Check SUDOD_DOWNLOAD_URL in config/validator-network.env"
 
   echo ""
   echo "  SUDO Validator — automatic join"
   echo "  Chain: $CHAIN_ID | Stake required: ${STAKE_SUDO} SUDO"
-  echo "  Chain source: $CHAIN_ROOT"
+  echo "  Binary: $BINARY"
   echo ""
 
   validator_install_deps
   export PATH="$PATH:/usr/local/go/bin"
-
-  if [[ ! -x "$BINARY" ]]; then
-    validator_build_sudod "$CHAIN_ROOT" "$BINARY"
-  fi
 
   setup_node
   ensure_wallet_key

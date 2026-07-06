@@ -64,15 +64,10 @@ EOF
 fi
 
 validator_install_deps
-export PATH="$PATH:/usr/local/go/bin"
 validator_open_firewall
 
-CHAIN_ROOT="$(validator_resolve_chain_root "$REPO_ROOT")" \
-  || die "Could not resolve SUDO chain source. Set SUDO_CHAIN_SRC or check network access."
-BINARY="$(validator_find_sudod_binary "$CHAIN_ROOT" "$REPO_ROOT")"
-if [[ ! -x "$BINARY" ]]; then
-  validator_build_sudod "$CHAIN_ROOT" "$BINARY"
-fi
+BINARY="$(validator_ensure_sudod_binary "$REPO_ROOT")" \
+  || die "Could not get sudod binary. Check SUDOD_DOWNLOAD_URL in config/validator-network.env"
 
 export MONIKER="${MONIKER:-sudo-validator}"
 export VALIDATOR_HOME="${VALIDATOR_HOME:-/opt/sudo-validator}"
