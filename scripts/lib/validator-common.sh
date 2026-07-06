@@ -7,6 +7,23 @@ set -euo pipefail
 SUDO_CHAIN_REPO_URL="${SUDO_CHAIN_REPO_URL:-https://github.com/Sudomessenger/network.git}"
 SUDO_CHAIN_REF="${SUDO_CHAIN_REF:-main}"
 
+# Build clone URL — Sudomessenger/network is private; set GITHUB_TOKEN on deploy worker/VPS.
+validator_git_clone_url() {
+  local base="${1:-$SUDO_CHAIN_REPO_URL}"
+  base="${base%.git}"
+  if [[ "$base" == *"@github.com/"* ]]; then
+    printf '%s\n' "$base.git"
+    return 0
+  fi
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    base="${base#https://}"
+    base="${base#http://}"
+    printf 'https://%s@%s.git\n' "$GITHUB_TOKEN" "$base"
+    return 0
+  fi
+  printf '%s.git\n' "$base"
+}
+
 validator_ensure_chain_source() {
   local repo_root="${1:?}"
   local chain_dir="${SUDO_CHAIN_SRC:-$repo_root/.chain/network/sudo-chain}"
@@ -22,14 +39,46 @@ validator_ensure_chain_source() {
   done
 
   local clone_root="${SUDO_CHAIN_CLONE_ROOT:-$repo_root/.chain/network}"
+  local clone_url branch branches=() clone_ok=0
+  clone_url="$(validator_git_clone_url "$SUDO_CHAIN_REPO_URL")"
+
   echo "==> Fetching SUDO chain source for sudod build..."
-  echo "    Clone: $SUDO_CHAIN_REPO_URL (ref: $SUDO_CHAIN_REF)"
+  echo "    Clone: ${clone_url//$GITHUB_TOKEN/***} (ref: ${SUDO_CHAIN_REF})"
   mkdir -p "$(dirname "$clone_root")"
   rm -rf "$clone_root"
-  git clone --depth 1 --branch "$SUDO_CHAIN_REF" "$SUDO_CHAIN_REPO_URL" "$clone_root"
+
+  export GIT_TERMINAL_PROMPT=0
+  export GIT_ASKPASS=/bin/false
+
+  branches=("$SUDO_CHAIN_REF")
+  [[ "$SUDO_CHAIN_REF" != "main" ]] && branches+=("main")
+  branches+=("feat/validator-ops-explorer-sync")
+
+  for branch in "${branches[@]}"; do
+    [[ -n "$branch" ]] || continue
+    if git clone --depth 1 --branch "$branch" "$clone_url" "$clone_root" 2>/tmp/sudo-chain-clone.err; then
+      clone_ok=1
+      break
+    fi
+    rm -rf "$clone_root"
+  done
+
+  if [[ "$clone_ok" != "1" ]]; then
+    echo "ERROR: git clone failed for Sudomessenger/network." >&2
+    sed 's/'"${GITHUB_TOKEN:-___none___}"'/***/g' /tmp/sudo-chain-clone.err >&2 2>/dev/null || cat /tmp/sudo-chain-clone.err >&2
+    echo "" >&2
+    echo "Fix: export GITHUB_TOKEN=ghp_xxx on the deploy worker (repo is private)." >&2
+    echo "     Or set SUDO_CHAIN_SRC=/path/to/local/sudo-chain with go.mod" >&2
+    echo "     Or set SUDOD_BIN=/path/to/prebuilt/sudod to skip clone/build." >&2
+    return 1
+  fi
+
   chain_dir="$clone_root/sudo-chain"
+  if [[ ! -f "$chain_dir/go.mod" && -f "$clone_root/go.mod" ]]; then
+    chain_dir="$clone_root"
+  fi
   [[ -f "$chain_dir/go.mod" ]] || {
-    echo "ERROR: go.mod not found at $chain_dir after clone." >&2
+    echo "ERROR: go.mod not found under $clone_root (expected sudo-chain/ or repo root)." >&2
     return 1
   }
   echo "$chain_dir"
