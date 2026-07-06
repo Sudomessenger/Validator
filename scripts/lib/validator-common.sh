@@ -162,9 +162,18 @@ validator_verify_sudod_file() {
   fi
 
   if validator_sudod_needs_wasmvm "$dest"; then
-    local wasmvm_name="${lib_dir}/$(validator_wasmvm_lib_name)"
-    if [[ ! -f "$wasmvm_name" ]]; then
-      echo "ERROR: missing CosmWasm library: $wasmvm_name" >&2
+    local wasmvm_name lib_found=0 repo_lib
+    for wasmvm_name in \
+      "${lib_dir}/$(validator_wasmvm_lib_name)" \
+      "${SUDO_LIB_DIR}/$(validator_wasmvm_lib_name)"; do
+      [[ -f "$wasmvm_name" ]] && lib_found=1 && break
+    done
+    repo_lib="$(dirname "$(dirname "$dest")")/lib/$(validator_wasmvm_lib_name)"
+    [[ -f "$repo_lib" ]] && lib_found=1
+    repo_lib="$(dirname "$(dirname "$dest")")/build/lib/$(validator_wasmvm_lib_name)"
+    [[ -f "$repo_lib" ]] && lib_found=1
+    if [[ "$lib_found" != "1" ]]; then
+      echo "ERROR: missing CosmWasm library: libwasmvm (checked $lib_dir and repo lib/)" >&2
       echo "       sudod requires libwasmvm — deploy script downloads it automatically." >&2
       return 1
     fi
@@ -230,7 +239,7 @@ validator_download_wasmvm_lib() {
       sudo cp -f "$dest" "$system_lib/$lib_name"
       sudo chmod 755 "$system_lib/$lib_name"
     fi
-    echo "==> libwasmvm ready: $system_lib/$lib_name (bundled)" >&2
+    echo "==> libwasmvm ready: $dest (bundled)" >&2
     return 0
   fi
 
