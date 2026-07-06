@@ -292,8 +292,6 @@ validator_download_sudod() {
   local dest="${2:-$repo_root/build/sudod}"
   local url tmp
 
-  validator_install_deps
-
   validator_download_wasmvm_lib "$repo_root" "$repo_root/build/lib" || return 1
   validator_setup_lib_path "$repo_root"
 
@@ -869,30 +867,80 @@ validator_detect_public_ip() {
     || echo ""
 }
 
+validator_wait_for_apt_lock() {
+  local max_wait="${1:-300}"
+  local elapsed=0
+  local locks=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock)
+
+  while true; do
+    local busy=0 lock
+    for lock in "${locks[@]}"; do
+      [[ -e "$lock" ]] || continue
+      if fuser "$lock" >/dev/null 2>&1; then
+        busy=1
+        break
+      fi
+    done
+    [[ "$busy" == "0" ]] && return 0
+
+    if [[ "$elapsed" -eq 0 ]]; then
+      echo "==> Waiting for apt lock (another apt process is running)..." >&2
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+    if [[ "$elapsed" -ge "$max_wait" ]]; then
+      echo "ERROR: apt lock busy for ${max_wait}s — stop other apt/unattended-upgrades or retry later." >&2
+      return 1
+    fi
+  done
+}
+
+validator_apt_run() {
+  [[ "${VALIDATOR_SKIP_APT:-0}" == "1" ]] && return 0
+  command -v apt-get >/dev/null 2>&1 || return 0
+  validator_wait_for_apt_lock "${APT_LOCK_TIMEOUT:-300}" || return 1
+  local apt_opts=(
+    -o "DPkg::Lock::Timeout=120"
+    -o "APT::Acquire::Retries=3"
+  )
+  if [[ "$(id -u)" == "0" ]]; then
+    DEBIAN_FRONTEND=noninteractive apt-get "${apt_opts[@]}" "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_opts[@]}" "$@"
+  else
+    DEBIAN_FRONTEND=noninteractive apt-get "${apt_opts[@]}" "$@"
+  fi
+}
+
 validator_install_deps() {
   local need_apt=0
-  for cmd in python3 jq curl file readelf; do
+  for cmd in python3 jq curl file; do
     command -v "$cmd" >/dev/null 2>&1 || need_apt=1
   done
-  if [[ "$need_apt" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
+  if ! command -v readelf >/dev/null 2>&1; then
+    need_apt=1
+  fi
+  if [[ "$need_apt" != "1" ]]; then
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then
     echo "==> Installing system dependencies (jq, curl, python3, libc6)..." >&2
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-      jq curl python3 ca-certificates file binutils libc6 libgcc-s1 >/dev/null 2>&1 \
-      || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        jq curl python3 ca-certificates file binutils libc6 libgcc-s1
+    validator_apt_run update -qq || return 1
+    validator_apt_run install -y -qq \
+      jq curl python3 ca-certificates file binutils libc6 libgcc-s1 || \
+    validator_apt_run install -y \
+      jq curl python3 ca-certificates file binutils libc6 libgcc-s1 || return 1
   fi
   if [[ "${SUDO_BUILD_FROM_SOURCE:-0}" == "1" ]]; then
     for cmd in git gcc make; do
       command -v "$cmd" >/dev/null 2>&1 || need_apt=1
     done
     if [[ "$need_apt" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
-      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-        build-essential make git >/dev/null 2>&1 || true
+      validator_apt_run install -y -qq build-essential make git >/dev/null 2>&1 || true
     fi
     if ! command -v go >/dev/null 2>&1; then
       if [[ ! -x /usr/local/go/bin/go ]]; then
-        echo "==> Installing Go 1.22 (source build mode)..."
+        echo "==> Installing Go 1.22 (source build mode)..." >&2
         curl -fsSL https://go.dev/dl/go1.22.7.linux-amd64.tar.gz | sudo tar -C /usr/local -xz
       fi
       export PATH="$PATH:/usr/local/go/bin"

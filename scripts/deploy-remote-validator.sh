@@ -72,9 +72,6 @@ export KEYRING_BACKEND=test
 export MONIKER='${MONIKER_ESC}'
 export WAIT_FOR_FUNDS=1
 
-apt-get update -qq
-apt-get install -y -qq git curl jq python3 ca-certificates file binutils libc6 libgcc-s1
-
 rm -rf /opt/sudo-chain-deploy
 git clone --depth 1 '${REPO_URL}' /opt/sudo-chain-deploy
 cd /opt/sudo-chain-deploy
