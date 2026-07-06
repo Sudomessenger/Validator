@@ -49,37 +49,47 @@ done
 [[ -n "$MNEMONIC" || -n "$PRIVATE_KEY" ]] || die "Missing --mnemonic or --private-key"
 command -v sshpass >/dev/null 2>&1 || die "Install sshpass: sudo apt install -y sshpass"
 
+# Escape for safe embedding in remote single-quoted string
+escape_sq() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
+MNEMONIC_ESC="$(escape_sq "$MNEMONIC")"
+PRIVATE_KEY_ESC="$(escape_sq "$PRIVATE_KEY")"
+MONIKER_ESC="$(escape_sq "$MONIKER")"
+
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
-REMOTE="sshpass -p '$SERVER_PASSWORD' ssh $SSH_OPTS ${SERVER_USER}@${SERVER_IP}"
+REMOTE="sshpass -p $(printf '%q' "$SERVER_PASSWORD") ssh $SSH_OPTS ${SERVER_USER}@${SERVER_IP}"
 
 echo "==> Deploying SUDO validator to ${SERVER_USER}@${SERVER_IP} ..."
 
-eval "$REMOTE" "'bash -s'" <<REMOTE_SCRIPT
+eval "$REMOTE" bash -s <<REMOTE_SCRIPT
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-export GITHUB_TOKEN='${GITHUB_TOKEN:-}'
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/false
-apt-get update -qq
-apt-get install -y -qq git curl jq python3 ca-certificates file binutils libc6 libgcc-s1
-rm -rf /opt/sudo-chain-deploy
-git clone --depth 1 '$REPO_URL' /opt/sudo-chain-deploy
-cd /opt/sudo-chain-deploy
-chmod +x join-validator.sh scripts/*.sh scripts/lib/*.sh 2>/dev/null || true
 export VALIDATOR_HOME=/opt/sudo-validator
 export SUDO_LIB_DIR=/usr/local/lib/sudo
 export LD_LIBRARY_PATH=/usr/local/lib/sudo
-export MONIKER='$MONIKER'
-JOIN_ARGS=""
-if [[ -n '$PRIVATE_KEY' ]]; then
-  JOIN_ARGS="--private-key '$PRIVATE_KEY'"
+export KEYRING_BACKEND=test
+export MONIKER='${MONIKER_ESC}'
+export WAIT_FOR_FUNDS=1
+
+apt-get update -qq
+apt-get install -y -qq git curl jq python3 ca-certificates file binutils libc6 libgcc-s1
+
+rm -rf /opt/sudo-chain-deploy
+git clone --depth 1 '${REPO_URL}' /opt/sudo-chain-deploy
+cd /opt/sudo-chain-deploy
+chmod +x join-validator.sh scripts/*.sh scripts/lib/*.sh 2>/dev/null || true
+
+if [[ -n '${PRIVATE_KEY_ESC}' ]]; then
+  export VALIDATOR_PRIVATE_KEY='${PRIVATE_KEY_ESC}'
 else
-  JOIN_ARGS="--mnemonic '$MNEMONIC'"
+  export VALIDATOR_MNEMONIC='${MNEMONIC_ESC}'
 fi
-./join-validator.sh \$JOIN_ARGS --no-wait
+
+./join-validator.sh --moniker '${MONIKER_ESC}'
 REMOTE_SCRIPT
 
 echo ""
-echo "==> Remote deploy started. Check status:"
+echo "==> Remote deploy finished. Check status:"
 echo "    ssh ${SERVER_USER}@${SERVER_IP} 'sudo systemctl status sudo-validator'"
 echo "    https://sudoscan.io/validators"

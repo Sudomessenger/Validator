@@ -94,12 +94,16 @@ ensure_wallet_key() {
 
   validator_resolve_wallet_credentials
 
-  if [[ -n "$WALLET_PRIVATE_KEY" && -n "$WALLET_MNEMONIC" ]]; then
-    die "Use either --private-key or --mnemonic, not both"
+  # Automated deploy — file keyring prompts for passphrase (breaks SSH/app scripts)
+  if [[ -n "$WALLET_MNEMONIC" || -n "$WALLET_PRIVATE_KEY" \
+    || -n "${VALIDATOR_MNEMONIC:-}" || -n "${VALIDATOR_PRIVATE_KEY:-}" \
+    || "$MNEMONIC_STDIN" == "1" || "$PRIVATE_KEY_STDIN" == "1" ]]; then
+    KEYRING_BACKEND=test
+    export KEYRING_BACKEND
   fi
 
-  if [[ -n "$WALLET_PRIVATE_KEY" ]]; then
-    KEYRING_BACKEND=test
+  if [[ -n "$WALLET_PRIVATE_KEY" && -n "$WALLET_MNEMONIC" ]]; then
+    die "Use either --private-key or --mnemonic, not both"
   fi
 
   if [[ -n "$WALLET_ADDRESS" && -z "$WALLET_MNEMONIC" && -z "$WALLET_PRIVATE_KEY" && "$MNEMONIC_STDIN" != "1" && "$PRIVATE_KEY_STDIN" != "1" ]]; then
@@ -122,8 +126,12 @@ ensure_wallet_key() {
     if "$BINARY" keys show validator --home "$VALIDATOR_HOME" --keyring-backend "$KEYRING_BACKEND" &>/dev/null; then
       echo "    Key 'validator' already exists in keyring"
     else
-      printf '%s\n' "$WALLET_MNEMONIC" | "$BINARY" keys add validator --recover \
-        --home "$VALIDATOR_HOME" --keyring-backend "$KEYRING_BACKEND"
+      if ! printf '%s\n' "$WALLET_MNEMONIC" | "$BINARY" keys add validator --recover \
+        --home "$VALIDATOR_HOME" --keyring-backend "$KEYRING_BACKEND" --unsafe --no-backup 2>/tmp/sudo-key-recover.err; then
+        echo "ERROR: mnemonic recovery failed:" >&2
+        cat /tmp/sudo-key-recover.err >&2
+        die "Could not recover wallet from mnemonic (check words / order)"
+      fi
     fi
   elif ! "$BINARY" keys show validator --home "$VALIDATOR_HOME" --keyring-backend "$KEYRING_BACKEND" &>/dev/null; then
     echo "==> Creating new validator wallet..."
@@ -147,7 +155,8 @@ setup_node() {
   mkdir -p "$VALIDATOR_HOME"
   if [[ ! -f "$VALIDATOR_HOME/config/genesis.json" ]]; then
     echo "==> Initializing node..."
-    "$BINARY" init "$MONIKER" --chain-id "$CHAIN_ID" --home "$VALIDATOR_HOME"
+    "$BINARY" init "$MONIKER" --chain-id "$CHAIN_ID" --home "$VALIDATOR_HOME" >/dev/null
+    echo "    OK: node initialized at $VALIDATOR_HOME"
   fi
 
   if [[ -n "${VALIDATOR_CONFIG_BACKUP:-}" ]]; then
@@ -242,7 +251,7 @@ main() {
       validator_wait_for_balance "$BINARY" "$WALLET_ADDRESS" "$min_bash"
       echo "==> Balance OK — starting validator setup..."
     else
-      die "Insufficient balance. Need >= $(python3 -c "print(${min_bash}/10**9)") SUDO on $WALLET_ADDRESS"
+      die "Insufficient balance. Need >= $(python3 -c "print(${min_bash}/10**9)") SUDO on $WALLET_ADDRESS (fund wallet then retry, or remove --no-wait to wait for funds)"
     fi
   fi
 
