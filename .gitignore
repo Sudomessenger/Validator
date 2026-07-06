@@ -1,0 +1,18 @@
+# Local secrets — never commit
+config/validator-deploy.env
+*.env.local
+
+# Chain source clone (downloaded on first build)
+.chain/
+
+# Built binary
+build/
+
+# Validator node data (if running from repo dir during dev)
+data/
+*.log
+
+# OS / editor
+.DS_Store
+*.swp
+*~
