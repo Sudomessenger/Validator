@@ -9,48 +9,132 @@ SUDO_CHAIN_REPO_URL="${SUDO_CHAIN_REPO_URL:-https://github.com/Sudomessenger/net
 SUDO_CHAIN_REF="${SUDO_CHAIN_REF:-main}"
 SUDOD_DOWNLOAD_URL="${SUDOD_DOWNLOAD_URL:-https://github.com/Sudomessenger/Validator/releases/download/v1.0.0/sudod-linux-amd64}"
 
-validator_download_sudod() {
+validator_sudod_asset_for_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "sudod-linux-amd64" ;;
+    aarch64|arm64) echo "sudod-linux-arm64" ;;
+    *) echo "unsupported" ;;
+  esac
+}
+
+validator_resolve_sudod_download_url() {
   local repo_root="${1:?}"
-  local dest="${2:-$repo_root/build/sudod}"
   local url="${SUDOD_DOWNLOAD_URL:-}"
-  local tmp="${dest}.download"
+  local asset arch base
 
   [[ -n "$url" ]] || {
     validator_load_network_defaults "$repo_root"
     url="${SUDOD_DOWNLOAD_URL:-}"
   }
-  [[ -n "$url" ]] || {
-    echo "ERROR: SUDOD_DOWNLOAD_URL not set." >&2
+  [[ -n "$url" ]] || return 1
+
+  asset="$(validator_sudod_asset_for_arch)"
+  if [[ "$asset" == "unsupported" ]]; then
+    echo "ERROR: unsupported CPU arch: $(uname -m) (need x86_64 or aarch64 VPS)." >&2
+    return 1
+  fi
+  if [[ "$asset" == "sudod-linux-arm64" && "$url" == *"sudod-linux-amd64"* ]]; then
+    url="${url/sudod-linux-amd64/sudod-linux-arm64}"
+    if [[ "$url" == *"sudod-linux-arm64"* ]]; then
+      echo "WARN: ARM64 binary requested — ensure release asset sudod-linux-arm64 exists." >&2
+    fi
+  fi
+  printf '%s\n' "$url"
+}
+
+validator_verify_sudod_file() {
+  local dest="${1:?}"
+  local size ftype
+
+  [[ -f "$dest" ]] || {
+    echo "ERROR: sudod file missing: $dest" >&2
     return 1
   }
 
+  size="$(stat -c%s "$dest" 2>/dev/null || wc -c <"$dest" | tr -d ' ')"
+  if [[ "${size:-0}" -lt 10000000 ]]; then
+    echo "ERROR: download too small (${size} bytes) — not a valid binary." >&2
+    echo "       First bytes:" >&2
+    head -c 120 "$dest" >&2 || true
+    echo >&2
+    return 1
+  fi
+
+  chmod +x "$dest" 2>/dev/null || true
+
+  if command -v file >/dev/null 2>&1; then
+    ftype="$(file -b "$dest")"
+    if ! grep -qiE 'ELF.*executable' <<<"$ftype"; then
+      echo "ERROR: downloaded file is not an ELF executable." >&2
+      echo "       file: $ftype" >&2
+      head -c 120 "$dest" >&2 || true
+      echo >&2
+      return 1
+    fi
+    case "$(uname -m)" in
+      x86_64|amd64)
+        if grep -qiE 'ARM|aarch64' <<<"$ftype"; then
+          echo "ERROR: wrong binary arch (ARM) for x86_64 server." >&2
+          return 1
+        fi
+        ;;
+      aarch64|arm64)
+        if grep -qiE 'x86-64|80386|Intel' <<<"$ftype"; then
+          echo "ERROR: wrong binary arch (x86_64) for ARM server — need sudod-linux-arm64." >&2
+          return 1
+        fi
+        ;;
+    esac
+  fi
+
+  # Best-effort run test (may fail on noexec mounts — ELF check above is authoritative)
+  if "$dest" version >/dev/null 2>&1 || "$dest" --help >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v file >/dev/null 2>&1 && file -b "$dest" | grep -qiE 'ELF.*executable'; then
+    echo "    OK: ELF binary verified (${size} bytes)" >&2
+    return 0
+  fi
+
+  echo "ERROR: downloaded file is not a valid sudod binary." >&2
+  return 1
+}
+
+validator_download_sudod() {
+  local repo_root="${1:?}"
+  local dest="${2:-$repo_root/build/sudod}"
+  local url tmp
+
+  url="$(validator_resolve_sudod_download_url "$repo_root")" || {
+    echo "ERROR: SUDOD_DOWNLOAD_URL not set." >&2
+    return 1
+  }
+  tmp="${dest}.download"
+
   echo "==> Downloading pre-built sudod..."
   echo "    URL: $url"
+  echo "    Arch: $(uname -m)"
   mkdir -p "$(dirname "$dest")"
-  rm -f "$tmp"
-  if ! curl -fsSL --connect-timeout 120 --retry 3 --retry-delay 5 "$url" -o "$tmp"; then
+  rm -f "$tmp" "$dest"
+
+  if ! curl -fSL --connect-timeout 180 --retry 3 --retry-delay 5 "$url" -o "$tmp"; then
     rm -f "$tmp"
     if [[ -n "${SUDOD_DOWNLOAD_FALLBACK_URL:-}" ]]; then
       echo "    Primary failed — trying fallback: $SUDOD_DOWNLOAD_FALLBACK_URL"
-      if curl -fsSL --connect-timeout 120 --retry 2 "$SUDOD_DOWNLOAD_FALLBACK_URL" -o "$tmp"; then
-        :
-      else
+      if ! curl -fSL --connect-timeout 180 --retry 2 "$SUDOD_DOWNLOAD_FALLBACK_URL" -o "$tmp"; then
         rm -f "$tmp"
-        echo "ERROR: sudod download failed from $url and fallback." >&2
-        echo "       Upload binary: bash scripts/upload-sudod-release.sh" >&2
+        echo "ERROR: sudod download failed." >&2
         return 1
       fi
     else
       echo "ERROR: sudod download failed from $url" >&2
-      echo "       Create GitHub Release v1.0.0 with asset sudod-linux-amd64" >&2
-      echo "       Or: bash scripts/upload-sudod-release.sh" >&2
       return 1
     fi
   fi
+
   mv "$tmp" "$dest"
-  chmod +x "$dest"
-  if ! "$dest" version >/dev/null 2>&1 && ! "$dest" --help >/dev/null 2>&1; then
-    echo "ERROR: downloaded file is not a valid sudod binary." >&2
+  if ! validator_verify_sudod_file "$dest"; then
     rm -f "$dest"
     return 1
   fi
@@ -60,17 +144,14 @@ validator_download_sudod() {
 
 validator_ensure_sudod_binary() {
   local repo_root="${1:?}"
-  local binary
-  binary="$(validator_find_sudod_binary "$repo_root" "$repo_root")"
+  local binary="${SUDOD_BIN:-$repo_root/build/sudod}"
 
-  if [[ -x "$binary" && "$binary" != "$repo_root/build/sudod" ]] || \
-     { [[ -x "$binary" ]] && "$binary" version >/dev/null 2>&1; }; then
-    echo "$binary"
+  if [[ -n "${SUDOD_BIN:-}" && -x "$SUDOD_BIN" ]]; then
+    echo "$SUDOD_BIN"
     return 0
   fi
 
-  binary="${SUDOD_BIN:-$repo_root/build/sudod}"
-  if [[ -x "$binary" ]] && "$binary" version >/dev/null 2>&1; then
+  if [[ -f "$binary" ]] && validator_verify_sudod_file "$binary" 2>/dev/null; then
     echo "$binary"
     return 0
   fi
@@ -557,16 +638,16 @@ validator_detect_public_ip() {
 
 validator_install_deps() {
   local need_apt=0
-  for cmd in python3 jq curl; do
+  for cmd in python3 jq curl file; do
     command -v "$cmd" >/dev/null 2>&1 || need_apt=1
   done
   if [[ "$need_apt" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
     echo "==> Installing system dependencies (jq, curl, python3)..."
     sudo apt-get update -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-      jq curl python3 ca-certificates >/dev/null 2>&1 \
+      jq curl python3 ca-certificates file >/dev/null 2>&1 \
       || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        jq curl python3 ca-certificates
+        jq curl python3 ca-certificates file
   fi
   if [[ "${SUDO_BUILD_FROM_SOURCE:-0}" == "1" ]]; then
     for cmd in git gcc make; do
