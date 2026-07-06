@@ -215,11 +215,24 @@ validator_download_wasmvm_lib() {
   }
 
   dest="$lib_dir/$lib_name"
-  if [[ -w /usr/local/lib ]] || [[ ! -e "$system_lib" ]]; then
-    mkdir -p "$lib_dir" 2>/dev/null || sudo mkdir -p "$system_lib"
-  fi
   mkdir -p "$lib_dir"
   sudo mkdir -p "$system_lib" 2>/dev/null || mkdir -p "$system_lib" 2>/dev/null || true
+
+  local bundled="$repo_root/lib/$lib_name"
+  if [[ -f "$bundled" ]]; then
+    echo "==> Installing bundled libwasmvm from repo..." >&2
+    cp -f "$bundled" "$dest"
+    chmod 755 "$dest"
+    if [[ -w "$system_lib" ]]; then
+      cp -f "$dest" "$system_lib/$lib_name"
+      chmod 755 "$system_lib/$lib_name"
+    elif command -v sudo >/dev/null 2>&1; then
+      sudo cp -f "$dest" "$system_lib/$lib_name"
+      sudo chmod 755 "$system_lib/$lib_name"
+    fi
+    echo "==> libwasmvm ready: $system_lib/$lib_name (bundled)" >&2
+    return 0
+  fi
 
   if [[ -f "$system_lib/$lib_name" ]]; then
     echo "==> libwasmvm already present: $system_lib/$lib_name" >&2
