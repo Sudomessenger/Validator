@@ -279,23 +279,23 @@ SUDO_LIB_DIR=/usr/local/lib/sudo
 
 ### Step 1 — User VPS par deploy
 
-Backend worker ye script chalata hai:
+Backend worker ye script chalata hai (**user ke VPS par**, worker par nahi):
+
 ```bash
 cd /opt/validator-worker
+git pull origin main
 
-./scripts/deploy-remote-validator.sh \
+./scripts/deploy-from-app.sh \
   --server-ip "$SERVER_IP" \
-  --user "$SSH_USER" \
+  --user "${SSH_USER:-root}" \
   --password "$SSH_PASSWORD" \
   --moniker "$MONIKER" \
   --mnemonic "$MNEMONIC"
 ```
 
-Script automatically VPS par:
-1. SSH login (IP + password)
-2. System deps install (`libc6`, `jq`, `curl`, `binutils`)
-3. `git clone` Validator repo (includes bundled `lib/libwasmvm.x86_64.so`)
-4. `join-validator.sh` — libwasmvm install → sudod download → wallet import → node init → sync → `create-validator` → systemd
+> **Important:** `./join-validator.sh` sirf us server par chalao jahan node install hona hai.  
+> App backend ko **`deploy-from-app.sh`** (ya `deploy-remote-validator.sh`) use karna chahiye — ye SSH karke **user ke VPS IP** par install karta hai.  
+> Worker par seedha `join-validator.sh` chalane se galat server par deploy hoga.
 
 **Backend worker example (Node.js sketch):**
 
@@ -305,13 +305,13 @@ const util = require('util');
 const exec = util.promisify(execFile);
 
 async function startDeploy({ serverIp, sshUser, sshPassword, moniker, mnemonic }) {
-  await exec('/opt/validator-worker/scripts/deploy-remote-validator.sh', [
+  await exec('/opt/validator-worker/scripts/deploy-from-app.sh', [
     '--server-ip', serverIp,
     '--user', sshUser || 'root',
     '--password', sshPassword,
     '--moniker', moniker,
     '--mnemonic', mnemonic,
-  ], { timeout: 3_600_000 }); // 1 hour max
+  ], { timeout: 3_600_000, env: { ...process.env, VALIDATOR_SKIP_GIT_PULL: '1' } });
 }
 ```
 
@@ -715,7 +715,7 @@ GET https://lcd.sudoscan.io/cosmos/staking/v1beta1/validators/{valoperAddress}
 | `sudod download failed` | Worker par `git pull origin main` — check `SUDOD_DOWNLOAD_URL` in config |
 | `missing libwasmvm` / `loader/interpreter issue` | Worker par `git pull` — repo me `lib/libwasmvm.x86_64.so` bundled hai; VPS Ubuntu/Debian hona chahiye (Alpine nahi) |
 | `Insufficient balance` | App wallet me **1001 SUDO** bhejo; `--no-wait` hatao ya balance ke baad retry |
-| `apt lock` / `dpkg lock-frontend` | Doosra deploy/apt chal raha — 2–3 min wait karke retry; parallel deploy mat chalao |
+| `Automated deploy requires wallet credentials` | Backend `deploy-from-app.sh` use kare + `--mnemonic` pass kare; worker par seedha `join-validator.sh` mat chalao |
 | SSH connection failed | Galat IP/password; port 22 check |
 | Insufficient balance | 1001 SUDO app wallet me bhejo |
 | Syncing bahut der | Normal 30–90 min; seed se sync |

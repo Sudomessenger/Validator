@@ -94,12 +94,16 @@ ensure_wallet_key() {
 
   validator_resolve_wallet_credentials
 
-  # Automated deploy — file keyring prompts for passphrase (breaks SSH/app scripts)
-  if [[ -n "$WALLET_MNEMONIC" || -n "$WALLET_PRIVATE_KEY" \
+  # App / SSH / CI — always use test keyring (file keyring prompts for passphrase)
+  if [[ ! -t 0 ]] || [[ -n "$WALLET_MNEMONIC" || -n "$WALLET_PRIVATE_KEY" \
     || -n "${VALIDATOR_MNEMONIC:-}" || -n "${VALIDATOR_PRIVATE_KEY:-}" \
     || "$MNEMONIC_STDIN" == "1" || "$PRIVATE_KEY_STDIN" == "1" ]]; then
     KEYRING_BACKEND=test
     export KEYRING_BACKEND
+  fi
+
+  if [[ ! -t 0 ]] && [[ -z "$WALLET_MNEMONIC" && -z "$WALLET_PRIVATE_KEY" ]]; then
+    die "Automated deploy requires wallet credentials. Set VALIDATOR_MNEMONIC (or use scripts/deploy-remote-validator.sh with --server-ip + --mnemonic to deploy on user VPS)."
   fi
 
   if [[ -n "$WALLET_PRIVATE_KEY" && -n "$WALLET_MNEMONIC" ]]; then
@@ -155,7 +159,9 @@ setup_node() {
   mkdir -p "$VALIDATOR_HOME"
   if [[ ! -f "$VALIDATOR_HOME/config/genesis.json" ]]; then
     echo "==> Initializing node..."
-    "$BINARY" init "$MONIKER" --chain-id "$CHAIN_ID" --home "$VALIDATOR_HOME" >/dev/null
+    if ! "$BINARY" init "$MONIKER" --chain-id "$CHAIN_ID" --home "$VALIDATOR_HOME" &>/dev/null; then
+      die "sudod init failed for $VALIDATOR_HOME (check binary: $BINARY)"
+    fi
     echo "    OK: node initialized at $VALIDATOR_HOME"
   fi
 
