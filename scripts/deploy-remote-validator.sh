@@ -60,12 +60,15 @@ export DEBIAN_FRONTEND=noninteractive
 export GITHUB_TOKEN='${GITHUB_TOKEN:-}'
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/false
-apt-get update -qq && apt-get install -y -qq git curl jq python3 ca-certificates file binutils libc6 libgcc-s1 2>/dev/null || true
+apt-get update -qq
+apt-get install -y -qq git curl jq python3 ca-certificates file binutils libc6 libgcc-s1
 rm -rf /opt/sudo-chain-deploy
 git clone --depth 1 '$REPO_URL' /opt/sudo-chain-deploy
 cd /opt/sudo-chain-deploy
 chmod +x join-validator.sh scripts/*.sh scripts/lib/*.sh 2>/dev/null || true
 export VALIDATOR_HOME=/opt/sudo-validator
+export SUDO_LIB_DIR=/usr/local/lib/sudo
+export LD_LIBRARY_PATH=/usr/local/lib/sudo
 export MONIKER='$MONIKER'
 JOIN_ARGS=""
 if [[ -n '$PRIVATE_KEY' ]]; then

@@ -7,7 +7,58 @@ set -euo pipefail
 # Optional source build: SUDO_BUILD_FROM_SOURCE=1 + SUDO_CHAIN_SRC or GITHUB_TOKEN.
 SUDO_CHAIN_REPO_URL="${SUDO_CHAIN_REPO_URL:-https://github.com/Sudomessenger/network.git}"
 SUDO_CHAIN_REF="${SUDO_CHAIN_REF:-main}"
-SUDOD_DOWNLOAD_URL="${SUDOD_DOWNLOAD_URL:-https://github.com/Sudomessenger/Validator/releases/download/v1.0.0/sudod-linux-amd64}"
+SUDOD_DOWNLOAD_URL="${SUDOD_DOWNLOAD_URL:-https://github.com/Sudomessenger/Validator/releases/download/v1.0.1/sudod-linux-amd64}"
+WASMVM_DOWNLOAD_URL="${WASMVM_DOWNLOAD_URL:-}"
+SUDO_LIB_DIR="${SUDO_LIB_DIR:-/usr/local/lib/sudo}"
+
+validator_wasmvm_lib_name() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo "libwasmvm.x86_64.so" ;;
+    aarch64|arm64) echo "libwasmvm.aarch64.so" ;;
+    *) echo "unsupported" ;;
+  esac
+}
+
+validator_resolve_wasmvm_download_url() {
+  local repo_root="${1:?}"
+  local url="${WASMVM_DOWNLOAD_URL:-}"
+  local lib_name sudod_url
+
+  [[ -n "$url" ]] || {
+    validator_load_network_defaults "$repo_root"
+    url="${WASMVM_DOWNLOAD_URL:-}"
+  }
+
+  if [[ -n "$url" ]]; then
+    printf '%s\n' "$url"
+    return 0
+  fi
+
+  sudod_url="$(validator_resolve_sudod_download_url "$repo_root")" || return 1
+  lib_name="$(validator_wasmvm_lib_name)"
+  [[ "$lib_name" != "unsupported" ]] || return 1
+  printf '%s\n' "${sudod_url%/*}/${lib_name}"
+}
+
+validator_setup_lib_path() {
+  local repo_root="${1:-}"
+  local lib_dir="${SUDO_LIB_DIR}"
+  local extra=""
+
+  [[ -n "$repo_root" && -d "$repo_root/build/lib" ]] && extra="$repo_root/build/lib"
+  if [[ -n "$extra" ]]; then
+    export LD_LIBRARY_PATH="${extra}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
+  if [[ -d "$lib_dir" ]]; then
+    export LD_LIBRARY_PATH="${lib_dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
+}
+
+validator_sudod_needs_wasmvm() {
+  local dest="${1:?}"
+  command -v readelf >/dev/null 2>&1 || return 1
+  readelf -d "$dest" 2>/dev/null | grep -q 'libwasmvm'
+}
 
 validator_sudod_asset_for_arch() {
   case "$(uname -m)" in
@@ -59,6 +110,7 @@ validator_sudod_interpreter() {
 
 validator_verify_sudod_file() {
   local dest="${1:?}"
+  local lib_dir="${2:-${SUDO_LIB_DIR}}"
   local size ftype interp
 
   [[ -f "$dest" ]] || {
@@ -106,9 +158,19 @@ validator_verify_sudod_file() {
   if [[ -n "$interp" && ! -f "$interp" ]]; then
     echo "ERROR: sudod runtime loader missing: $interp" >&2
     echo "       Install: apt-get install -y libc6 libgcc-s1" >&2
-    echo "       Or rebuild sudod on Ubuntu/Debian (glibc), not Alpine/musl." >&2
     return 1
   fi
+
+  if validator_sudod_needs_wasmvm "$dest"; then
+    local wasmvm_name="${lib_dir}/$(validator_wasmvm_lib_name)"
+    if [[ ! -f "$wasmvm_name" ]]; then
+      echo "ERROR: missing CosmWasm library: $wasmvm_name" >&2
+      echo "       sudod requires libwasmvm — deploy script downloads it automatically." >&2
+      return 1
+    fi
+  fi
+
+  validator_setup_lib_path "$(dirname "$(dirname "$dest")")"
 
   if "$dest" version >/dev/null 2>&1 || "$dest" --help >/dev/null 2>&1; then
     echo "    OK: sudod executable verified (${size} bytes)" >&2
@@ -117,9 +179,17 @@ validator_verify_sudod_file() {
 
   local run_err
   run_err="$("$dest" version 2>&1 || "$dest" --help 2>&1 || true)"
-  if [[ "$run_err" == *"No such file or directory"* && -n "$interp" ]]; then
-    echo "ERROR: sudod cannot run — loader/interpreter issue ($interp)." >&2
-    echo "       Install: apt-get install -y libc6 libgcc-s1 binutils" >&2
+
+  if [[ "$run_err" == *"libwasmvm"* || "$run_err" == *"shared object"* ]]; then
+    echo "ERROR: sudod missing libwasmvm (CosmWasm runtime library)." >&2
+    echo "       Detail: $run_err" >&2
+    return 1
+  fi
+
+  if [[ "$run_err" == *"No such file or directory"* ]]; then
+    echo "ERROR: sudod cannot run on this server." >&2
+    echo "       Detail: $run_err" >&2
+    echo "       Try: apt-get install -y libc6 libgcc-s1" >&2
     return 1
   fi
 
@@ -133,10 +203,73 @@ validator_verify_sudod_file() {
   return 1
 }
 
+validator_download_wasmvm_lib() {
+  local repo_root="${1:?}"
+  local lib_dir="${2:-$repo_root/build/lib}"
+  local lib_name dest url tmp system_lib="${SUDO_LIB_DIR}"
+
+  lib_name="$(validator_wasmvm_lib_name)"
+  [[ "$lib_name" != "unsupported" ]] || {
+    echo "ERROR: unsupported CPU arch for libwasmvm: $(uname -m)" >&2
+    return 1
+  }
+
+  dest="$lib_dir/$lib_name"
+  mkdir -p "$lib_dir" "$system_lib"
+
+  if [[ -f "$system_lib/$lib_name" ]]; then
+    echo "==> libwasmvm already present: $system_lib/$lib_name" >&2
+    return 0
+  fi
+
+  url="$(validator_resolve_wasmvm_download_url "$repo_root")" || {
+    echo "ERROR: WASMVM_DOWNLOAD_URL not set and could not derive from SUDOD_DOWNLOAD_URL." >&2
+    return 1
+  }
+  tmp="${dest}.download"
+
+  echo "==> Downloading libwasmvm (CosmWasm runtime)..." >&2
+  echo "    URL: $url" >&2
+  rm -f "$tmp"
+
+  if ! curl -fSL --connect-timeout 180 --retry 3 --retry-delay 5 "$url" -o "$tmp"; then
+    rm -f "$tmp"
+    echo "ERROR: libwasmvm download failed from $url" >&2
+    return 1
+  fi
+
+  mv "$tmp" "$dest"
+  chmod 755 "$dest"
+
+  local lib_size
+  lib_size="$(stat -c%s "$dest" 2>/dev/null || wc -c <"$dest" | tr -d ' ')"
+  if [[ "${lib_size:-0}" -lt 1000000 ]]; then
+    echo "ERROR: libwasmvm download too small (${lib_size} bytes)." >&2
+    rm -f "$dest"
+    return 1
+  fi
+
+  if [[ -w "$system_lib" ]]; then
+    cp -f "$dest" "$system_lib/$lib_name"
+    chmod 755 "$system_lib/$lib_name"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo cp -f "$dest" "$system_lib/$lib_name"
+    sudo chmod 755 "$system_lib/$lib_name"
+  fi
+
+  echo "==> libwasmvm ready: $system_lib/$lib_name (${lib_size} bytes)" >&2
+  return 0
+}
+
 validator_download_sudod() {
   local repo_root="${1:?}"
   local dest="${2:-$repo_root/build/sudod}"
   local url tmp
+
+  validator_install_deps
+
+  validator_download_wasmvm_lib "$repo_root" "$repo_root/build/lib" || return 1
+  validator_setup_lib_path "$repo_root"
 
   url="$(validator_resolve_sudod_download_url "$repo_root")" || {
     echo "ERROR: SUDOD_DOWNLOAD_URL not set." >&2
@@ -166,6 +299,7 @@ validator_download_sudod() {
   fi
 
   mv "$tmp" "$dest"
+  chmod +x "$dest"
   if ! validator_verify_sudod_file "$dest"; then
     rm -f "$dest"
     return 1
@@ -195,6 +329,8 @@ validator_ensure_sudod_binary() {
   local binary="${SUDOD_BIN:-$repo_root/build/sudod}"
   local system_bin="/usr/local/bin/sudod"
 
+  validator_setup_lib_path "$repo_root"
+
   if [[ -n "${SUDOD_BIN:-}" && -f "$SUDOD_BIN" ]] \
     && validator_verify_sudod_file "$SUDOD_BIN" 2>/dev/null; then
     printf '%s\n' "$SUDOD_BIN"
@@ -221,6 +357,7 @@ validator_ensure_sudod_binary() {
     chain_root="$(validator_ensure_chain_source "$repo_root")" \
       || return 1
     validator_build_sudod "$chain_root" "$binary" || return 1
+    validator_download_wasmvm_lib "$repo_root" "$repo_root/build/lib" || true
     validator_install_sudod_systemwide "$binary" || true
     if [[ -f "$system_bin" ]]; then
       printf '%s\n' "$system_bin"
@@ -231,6 +368,7 @@ validator_ensure_sudod_binary() {
   fi
 
   validator_download_sudod "$repo_root" "$binary" || return 1
+  validator_setup_lib_path "$repo_root"
   if [[ -f "$system_bin" ]]; then
     printf '%s\n' "$system_bin"
   else
@@ -972,6 +1110,7 @@ After=network-online.target
 [Service]
 Type=simple
 User=${SUDO_USER:-root}
+Environment=LD_LIBRARY_PATH=${SUDO_LIB_DIR}
 ExecStart=${binary} start --home ${home}
 Restart=always
 RestartSec=5

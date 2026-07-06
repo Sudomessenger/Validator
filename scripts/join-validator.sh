@@ -197,17 +197,19 @@ main() {
   validator_load_network_defaults "$ROOT_DIR"
   validator_open_firewall
   validator_load_deploy_env "$ROOT_DIR"
+  validator_install_deps
+  export PATH="$PATH:/usr/local/go/bin"
+
   BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR" | tail -1)" \
     || die "Could not get sudod binary. Check SUDOD_DOWNLOAD_URL in config/validator-network.env"
+  validator_setup_lib_path "$ROOT_DIR"
 
   echo ""
   echo "  SUDO Validator — automatic join"
   echo "  Chain: $CHAIN_ID | Stake required: ${STAKE_SUDO} SUDO"
   echo "  Binary: $BINARY"
+  echo "  Libs:   ${LD_LIBRARY_PATH:-$SUDO_LIB_DIR}"
   echo ""
-
-  validator_install_deps
-  export PATH="$PATH:/usr/local/go/bin"
 
   setup_node
   ensure_wallet_key
