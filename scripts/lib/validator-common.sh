@@ -215,7 +215,11 @@ validator_download_wasmvm_lib() {
   }
 
   dest="$lib_dir/$lib_name"
-  mkdir -p "$lib_dir" "$system_lib"
+  if [[ -w /usr/local/lib ]] || [[ ! -e "$system_lib" ]]; then
+    mkdir -p "$lib_dir" 2>/dev/null || sudo mkdir -p "$system_lib"
+  fi
+  mkdir -p "$lib_dir"
+  sudo mkdir -p "$system_lib" 2>/dev/null || mkdir -p "$system_lib" 2>/dev/null || true
 
   if [[ -f "$system_lib/$lib_name" ]]; then
     echo "==> libwasmvm already present: $system_lib/$lib_name" >&2
