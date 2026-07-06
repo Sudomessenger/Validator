@@ -60,7 +60,7 @@ export DEBIAN_FRONTEND=noninteractive
 export GITHUB_TOKEN='${GITHUB_TOKEN:-}'
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/false
-apt-get update -qq && apt-get install -y -qq git curl jq python3 ca-certificates 2>/dev/null || true
+apt-get update -qq && apt-get install -y -qq git curl jq python3 ca-certificates file binutils libc6 libgcc-s1 2>/dev/null || true
 rm -rf /opt/sudo-chain-deploy
 git clone --depth 1 '$REPO_URL' /opt/sudo-chain-deploy
 cd /opt/sudo-chain-deploy

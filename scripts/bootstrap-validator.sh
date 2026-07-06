@@ -66,7 +66,7 @@ fi
 validator_install_deps
 validator_open_firewall
 
-BINARY="$(validator_ensure_sudod_binary "$REPO_ROOT")" \
+BINARY="$(validator_ensure_sudod_binary "$REPO_ROOT" | tail -1)" \
   || die "Could not get sudod binary. Check SUDOD_DOWNLOAD_URL in config/validator-network.env"
 
 export MONIKER="${MONIKER:-sudo-validator}"

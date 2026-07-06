@@ -197,7 +197,7 @@ main() {
   validator_load_network_defaults "$ROOT_DIR"
   validator_open_firewall
   validator_load_deploy_env "$ROOT_DIR"
-  BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR")" \
+  BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR" | tail -1)" \
     || die "Could not get sudod binary. Check SUDOD_DOWNLOAD_URL in config/validator-network.env"
 
   echo ""

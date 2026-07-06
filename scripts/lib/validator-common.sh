@@ -42,9 +42,24 @@ validator_resolve_sudod_download_url() {
   printf '%s\n' "$url"
 }
 
+validator_sudod_interpreter() {
+  local dest="${1:?}"
+  if command -v readelf >/dev/null 2>&1; then
+    readelf -l "$dest" 2>/dev/null \
+      | sed -n 's/.*program interpreter: \[\([^]]*\)\].*/\1/p' \
+      | head -1
+    return 0
+  fi
+  if command -v file >/dev/null 2>&1; then
+    file -b "$dest" 2>/dev/null \
+      | sed -n 's/.*interpreter \([^,]*\).*/\1/p' \
+      | head -1
+  fi
+}
+
 validator_verify_sudod_file() {
   local dest="${1:?}"
-  local size ftype
+  local size ftype interp
 
   [[ -f "$dest" ]] || {
     echo "ERROR: sudod file missing: $dest" >&2
@@ -87,9 +102,25 @@ validator_verify_sudod_file() {
     esac
   fi
 
-  # Best-effort run test (may fail on noexec mounts — ELF check above is authoritative)
+  interp="$(validator_sudod_interpreter "$dest" || true)"
+  if [[ -n "$interp" && ! -f "$interp" ]]; then
+    echo "ERROR: sudod runtime loader missing: $interp" >&2
+    echo "       Install: apt-get install -y libc6 libgcc-s1" >&2
+    echo "       Or rebuild sudod on Ubuntu/Debian (glibc), not Alpine/musl." >&2
+    return 1
+  fi
+
   if "$dest" version >/dev/null 2>&1 || "$dest" --help >/dev/null 2>&1; then
+    echo "    OK: sudod executable verified (${size} bytes)" >&2
     return 0
+  fi
+
+  local run_err
+  run_err="$("$dest" version 2>&1 || "$dest" --help 2>&1 || true)"
+  if [[ "$run_err" == *"No such file or directory"* && -n "$interp" ]]; then
+    echo "ERROR: sudod cannot run — loader/interpreter issue ($interp)." >&2
+    echo "       Install: apt-get install -y libc6 libgcc-s1 binutils" >&2
+    return 1
   fi
 
   if command -v file >/dev/null 2>&1 && file -b "$dest" | grep -qiE 'ELF.*executable'; then
@@ -98,6 +129,7 @@ validator_verify_sudod_file() {
   fi
 
   echo "ERROR: downloaded file is not a valid sudod binary." >&2
+  [[ -n "$run_err" ]] && echo "       $run_err" >&2
   return 1
 }
 
@@ -112,16 +144,16 @@ validator_download_sudod() {
   }
   tmp="${dest}.download"
 
-  echo "==> Downloading pre-built sudod..."
-  echo "    URL: $url"
-  echo "    Arch: $(uname -m)"
+  echo "==> Downloading pre-built sudod..." >&2
+  echo "    URL: $url" >&2
+  echo "    Arch: $(uname -m)" >&2
   mkdir -p "$(dirname "$dest")"
   rm -f "$tmp" "$dest"
 
   if ! curl -fSL --connect-timeout 180 --retry 3 --retry-delay 5 "$url" -o "$tmp"; then
     rm -f "$tmp"
     if [[ -n "${SUDOD_DOWNLOAD_FALLBACK_URL:-}" ]]; then
-      echo "    Primary failed — trying fallback: $SUDOD_DOWNLOAD_FALLBACK_URL"
+      echo "    Primary failed — trying fallback: $SUDOD_DOWNLOAD_FALLBACK_URL" >&2
       if ! curl -fSL --connect-timeout 180 --retry 2 "$SUDOD_DOWNLOAD_FALLBACK_URL" -o "$tmp"; then
         rm -f "$tmp"
         echo "ERROR: sudod download failed." >&2
@@ -138,21 +170,49 @@ validator_download_sudod() {
     rm -f "$dest"
     return 1
   fi
-  echo "==> sudod ready: $dest"
+  echo "==> sudod ready: $dest" >&2
+  validator_install_sudod_systemwide "$dest" || true
   return 0
+}
+
+validator_install_sudod_systemwide() {
+  local dest="${1:?}"
+  local system_bin="/usr/local/bin/sudod"
+  [[ -f "$dest" ]] || return 1
+  if [[ -w /usr/local/bin ]]; then
+    cp -f "$dest" "$system_bin"
+    chmod +x "$system_bin"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo cp -f "$dest" "$system_bin"
+    sudo chmod +x "$system_bin"
+  else
+    return 0
+  fi
 }
 
 validator_ensure_sudod_binary() {
   local repo_root="${1:?}"
   local binary="${SUDOD_BIN:-$repo_root/build/sudod}"
+  local system_bin="/usr/local/bin/sudod"
 
-  if [[ -n "${SUDOD_BIN:-}" && -x "$SUDOD_BIN" ]]; then
-    echo "$SUDOD_BIN"
+  if [[ -n "${SUDOD_BIN:-}" && -f "$SUDOD_BIN" ]] \
+    && validator_verify_sudod_file "$SUDOD_BIN" 2>/dev/null; then
+    printf '%s\n' "$SUDOD_BIN"
+    return 0
+  fi
+
+  if [[ -f "$system_bin" ]] && validator_verify_sudod_file "$system_bin" 2>/dev/null; then
+    printf '%s\n' "$system_bin"
     return 0
   fi
 
   if [[ -f "$binary" ]] && validator_verify_sudod_file "$binary" 2>/dev/null; then
-    echo "$binary"
+    validator_install_sudod_systemwide "$binary" || true
+    if [[ -f "$system_bin" ]]; then
+      printf '%s\n' "$system_bin"
+    else
+      printf '%s\n' "$binary"
+    fi
     return 0
   fi
 
@@ -161,12 +221,21 @@ validator_ensure_sudod_binary() {
     chain_root="$(validator_ensure_chain_source "$repo_root")" \
       || return 1
     validator_build_sudod "$chain_root" "$binary" || return 1
-    echo "$binary"
+    validator_install_sudod_systemwide "$binary" || true
+    if [[ -f "$system_bin" ]]; then
+      printf '%s\n' "$system_bin"
+    else
+      printf '%s\n' "$binary"
+    fi
     return 0
   fi
 
   validator_download_sudod "$repo_root" "$binary" || return 1
-  echo "$binary"
+  if [[ -f "$system_bin" ]]; then
+    printf '%s\n' "$system_bin"
+  else
+    printf '%s\n' "$binary"
+  fi
 }
 
 # Legacy / optional — only when SUDO_BUILD_FROM_SOURCE=1
@@ -638,16 +707,16 @@ validator_detect_public_ip() {
 
 validator_install_deps() {
   local need_apt=0
-  for cmd in python3 jq curl file; do
+  for cmd in python3 jq curl file readelf; do
     command -v "$cmd" >/dev/null 2>&1 || need_apt=1
   done
   if [[ "$need_apt" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
-    echo "==> Installing system dependencies (jq, curl, python3)..."
+    echo "==> Installing system dependencies (jq, curl, python3, libc6)..." >&2
     sudo apt-get update -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-      jq curl python3 ca-certificates file >/dev/null 2>&1 \
+      jq curl python3 ca-certificates file binutils libc6 libgcc-s1 >/dev/null 2>&1 \
       || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        jq curl python3 ca-certificates file
+        jq curl python3 ca-certificates file binutils libc6 libgcc-s1
   fi
   if [[ "${SUDO_BUILD_FROM_SOURCE:-0}" == "1" ]]; then
     for cmd in git gcc make; do

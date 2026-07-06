@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/validator-common.sh"
 
 VALIDATOR_HOME="${VALIDATOR_HOME:-/opt/sudo-validator}"
-BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR")"
+BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR" | tail -1)"
 KEY_NAME="${KEY_NAME:-validator}"
 
 [[ -x "$BINARY" ]] || { echo "ERROR: sudod not found"; exit 1; }

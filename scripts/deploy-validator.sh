@@ -17,7 +17,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/lib/validator-common.sh"
 validator_load_network_defaults "$ROOT_DIR"
-BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR")"
+BINARY="$(validator_ensure_sudod_binary "$ROOT_DIR" | tail -1)"
 CHAIN_ID="${CHAIN_ID:-sudo99}"
 VALIDATOR_HOME="${VALIDATOR_HOME:-/opt/sudo-validator}"
 MONIKER="${MONIKER:-sudo-validator}"
