@@ -31,12 +31,19 @@
 | **[Sudomessenger/Validator](https://github.com/Sudomessenger/Validator)** | **Haan — public** | Deploy scripts + config |
 | ~~Sudomessenger/network~~ | **Nahi** | Purana chain source — ab use nahi hota |
 
-**Validator repo standalone hai.** `sudod` binary **GitHub Release** se download hoti hai — koi private repo clone nahi.
+**Validator repo standalone hai.** Deploy ke liye do cheezein chahiye:
+
+| Component | Source |
+|-----------|--------|
+| **`sudod`** binary | GitHub Release (`SUDOD_DOWNLOAD_URL`) |
+| **`libwasmvm.x86_64.so`** | Repo me bundled (`lib/libwasmvm.x86_64.so`) — CosmWasm runtime |
 
 ```bash
 git clone https://github.com/Sudomessenger/Validator.git /opt/validator-worker
 cd /opt/validator-worker
+git pull origin main   # latest scripts + bundled libwasmvm
 # sudod auto-download: config/validator-network.env → SUDOD_DOWNLOAD_URL
+# libwasmvm auto-install: lib/ → /usr/local/lib/sudo + LD_LIBRARY_PATH
 ```
 
 **`GITHUB_TOKEN` ki zarurat nahi** — sirf public Validator repo + public sudod release.
@@ -135,7 +142,8 @@ Validation:
 
 ### Screen 4 — Deploy progress
 - `Connecting to server...`
-- `Installing dependencies...`
+- `Installing dependencies (libc6, jq, curl)...`
+- `Installing libwasmvm (CosmWasm library)...`
 - `Downloading sudod binary...`
 - `Registering validator...`
 - `Syncing blocks (30–90 min)...`
@@ -212,6 +220,7 @@ Authorization: Bearer <user_jwt>
   "steps": [
     { "id": "ssh_connect", "label": "Connected to server", "done": true },
     { "id": "clone_repo", "label": "Validator repo cloned", "done": true },
+    { "id": "install_libwasmvm", "label": "CosmWasm library installed", "done": true },
     { "id": "download_sudod", "label": "Node binary downloaded", "done": true },
     { "id": "create_validator", "label": "Validator registered on-chain", "done": true },
     { "id": "block_sync", "label": "Syncing blocks", "done": false },
@@ -249,11 +258,24 @@ Poll har **15–30 sec** jab tak `active` ya `failed` na ho.
 git clone https://github.com/Sudomessenger/Validator.git /opt/validator-worker
 cd /opt/validator-worker
 sudo apt install -y sshpass   # one-time
-git pull origin main          # updates ke liye
+git pull origin main          # HAR deploy se pehle — latest scripts + libwasmvm
 ```
 
-`sudod` binary automatically download hoti hai (`SUDOD_DOWNLOAD_URL` in `config/validator-network.env`).  
+Deploy flow automatically:
+1. **`libwasmvm.x86_64.so`** — repo ke `lib/` se install (`/usr/local/lib/sudo`)
+2. **`sudod`** — GitHub Release se download (`SUDOD_DOWNLOAD_URL`)
+3. **`LD_LIBRARY_PATH=/usr/local/lib/sudo`** — join script + systemd me set
+
 **Sudomessenger/network repo ki zarurat nahi.**
+
+### Config (`config/validator-network.env`)
+
+```bash
+SUDOD_DOWNLOAD_URL=https://github.com/Sudomessenger/Validator/releases/download/v1.0.0/sudod-linux-amd64
+# libwasmvm bundled in repo lib/ — release URL optional fallback:
+WASMVM_DOWNLOAD_URL=https://github.com/Sudomessenger/Validator/releases/download/v1.0.1/libwasmvm.x86_64.so
+SUDO_LIB_DIR=/usr/local/lib/sudo
+```
 
 ### Step 1 — User VPS par deploy
 
@@ -271,8 +293,9 @@ cd /opt/validator-worker
 
 Script automatically VPS par:
 1. SSH login (IP + password)
-2. `git clone` Validator repo
-3. `join-validator.sh` — wallet import + node init + sync + `create-validator` + systemd
+2. System deps install (`libc6`, `jq`, `curl`, `binutils`)
+3. `git clone` Validator repo (includes bundled `lib/libwasmvm.x86_64.so`)
+4. `join-validator.sh` — libwasmvm install → sudod download → wallet import → node init → sync → `create-validator` → systemd
 
 **Backend worker example (Node.js sketch):**
 
@@ -665,7 +688,7 @@ GET https://lcd.sudoscan.io/cosmos/staking/v1beta1/validators/{valoperAddress}
 
 | Item | Value |
 |------|-------|
-| OS | Ubuntu 22.04+ |
+| OS | Ubuntu 22.04+ (**Debian/glibc** — Alpine/musl supported nahi) |
 | SSH | Port 22 open, root login + password |
 | P2P | Port **26656** TCP inbound |
 | RAM | 4 GB min |
@@ -689,12 +712,23 @@ GET https://lcd.sudoscan.io/cosmos/staking/v1beta1/validators/{valoperAddress}
 
 | Problem | Fix |
 |---------|-----|
-| `sudod download failed` | `git pull` in `/opt/validator-worker` — check `SUDOD_DOWNLOAD_URL` in config |
+| `sudod download failed` | Worker par `git pull origin main` — check `SUDOD_DOWNLOAD_URL` in config |
+| `missing libwasmvm` / `loader/interpreter issue` | Worker par `git pull` — repo me `lib/libwasmvm.x86_64.so` bundled hai; VPS Ubuntu/Debian hona chahiye (Alpine nahi) |
+| `Could not get sudod binary` | VPS par manually: `ls lib/libwasmvm.x86_64.so` + `LD_LIBRARY_PATH=/usr/local/lib/sudo sudod version` |
 | SSH connection failed | Galat IP/password; port 22 check |
 | Insufficient balance | 1001 SUDO app wallet me bhejo |
 | Syncing bahut der | Normal 30–90 min; seed se sync |
 | Validator jailed | VPS: `bash scripts/unjail-validator.sh` |
-| Deploy stuck | Backend logs + VPS: `tail -f /var/log/sudo-validator-install.log` |
+| Deploy stuck | Backend logs + VPS: `tail -f /opt/sudo-validator/node.log` |
+
+### Manual verify (VPS par)
+
+```bash
+ls -la /opt/sudo-chain-deploy/lib/libwasmvm.x86_64.so
+ls -la /usr/local/lib/sudo/libwasmvm.x86_64.so
+LD_LIBRARY_PATH=/usr/local/lib/sudo sudod version
+sudo systemctl status sudo-validator
+```
 
 ---
 
