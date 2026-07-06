@@ -165,7 +165,7 @@ Content-Type: application/json
 Authorization: Bearer <user_jwt>
 ```
 
-**Request body:**
+**Request body (mnemonic):**
 
 ```json
 {
@@ -178,7 +178,25 @@ Authorization: Bearer <user_jwt>
 }
 ```
 
-> Agar app private key use karti hai to `"privateKey": "0x64hex..."` bhejo, `mnemonic` mat bhejo.
+**Request body (private key — recommended for app):**
+
+```json
+{
+  "serverIp": "147.93.153.13",
+  "sshPassword": "user_vps_password",
+  "sshUser": "root",
+  "moniker": "my-validator",
+  "walletAddress": "99ucr48vn2r595ttnu2454umlvkndcc8zeqqqqqq",
+  "privateKey": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+| Field | Format |
+|-------|--------|
+| `privateKey` | **64 hex characters** (32 bytes). `0x` prefix optional. |
+| `mnemonic` | 12 or 24 words — **either** `privateKey` **or** `mnemonic`, not both |
+
+> App me agar wallet se **private key export** hoti hai to backend ko wahi `--private-key` ke through bhejo — mnemonic ki zarurat nahi.
 
 **Success (202 Accepted):**
 
@@ -279,7 +297,7 @@ SUDO_LIB_DIR=/usr/local/lib/sudo
 
 ### Step 1 — User VPS par deploy
 
-Backend worker ye script chalata hai (**user ke VPS par**, worker par nahi):
+**Option A — private key (app ke liye recommended):**
 
 ```bash
 cd /opt/validator-worker
@@ -290,28 +308,49 @@ git pull origin main
   --user "${SSH_USER:-root}" \
   --password "$SSH_PASSWORD" \
   --moniker "$MONIKER" \
+  --private-key "$PRIVATE_KEY"
+```
+
+**Option B — mnemonic:**
+
+```bash
+./scripts/deploy-from-app.sh \
+  --server-ip "$SERVER_IP" \
+  --user "${SSH_USER:-root}" \
+  --password "$SSH_PASSWORD" \
+  --moniker "$MONIKER" \
   --mnemonic "$MNEMONIC"
 ```
 
 > **Important:** `./join-validator.sh` sirf us server par chalao jahan node install hona hai.  
-> App backend ko **`deploy-from-app.sh`** (ya `deploy-remote-validator.sh`) use karna chahiye — ye SSH karke **user ke VPS IP** par install karta hai.  
-> Worker par seedha `join-validator.sh` chalane se galat server par deploy hoga.
+> App backend ko **`deploy-from-app.sh`** use karna chahiye — ye SSH karke **user ke VPS IP** par install karta hai.
 
-**Backend worker example (Node.js sketch):**
+**Backend worker example (Node.js — private key):**
 
 ```javascript
 const { execFile } = require('child_process');
 const util = require('util');
 const exec = util.promisify(execFile);
 
-async function startDeploy({ serverIp, sshUser, sshPassword, moniker, mnemonic }) {
-  await exec('/opt/validator-worker/scripts/deploy-from-app.sh', [
+async function startDeploy({ serverIp, sshUser, sshPassword, moniker, privateKey, mnemonic }) {
+  const args = [
     '--server-ip', serverIp,
     '--user', sshUser || 'root',
     '--password', sshPassword,
     '--moniker', moniker,
-    '--mnemonic', mnemonic,
-  ], { timeout: 3_600_000, env: { ...process.env, VALIDATOR_SKIP_GIT_PULL: '1' } });
+  ];
+  if (privateKey) {
+    args.push('--private-key', privateKey.replace(/^0x/i, ''));
+  } else if (mnemonic) {
+    args.push('--mnemonic', mnemonic);
+  } else {
+    throw new Error('privateKey or mnemonic required');
+  }
+
+  await exec('/opt/validator-worker/scripts/deploy-from-app.sh', args, {
+    timeout: 3_600_000,
+    env: { ...process.env, VALIDATOR_SKIP_GIT_PULL: '1' },
+  });
 }
 ```
 
@@ -370,20 +409,36 @@ class ValidatorService {
     required String sshPassword,
     required String moniker,
     required String walletAddress,
-    required String mnemonic,
+    String? mnemonic,
+    String? privateKey,
     String sshUser = 'root',
   }) async {
+    if ((mnemonic == null || mnemonic.isEmpty) &&
+        (privateKey == null || privateKey.isEmpty)) {
+      throw ArgumentError('mnemonic or privateKey required');
+    }
+    if (mnemonic != null && mnemonic.isNotEmpty &&
+        privateKey != null && privateKey.isNotEmpty) {
+      throw ArgumentError('Use either mnemonic or privateKey, not both');
+    }
+
+    final body = <String, dynamic>{
+      'serverIp': serverIp,
+      'sshPassword': sshPassword,
+      'sshUser': sshUser,
+      'moniker': moniker,
+      'walletAddress': walletAddress,
+    };
+    if (privateKey != null && privateKey.isNotEmpty) {
+      body['privateKey'] = privateKey.replaceFirst(RegExp(r'^0x'), '');
+    } else {
+      body['mnemonic'] = mnemonic;
+    }
+
     final res = await http.post(
       Uri.parse('$apiBase/api/validator/deploy'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'serverIp': serverIp,
-        'sshPassword': sshPassword,
-        'sshUser': sshUser,
-        'moniker': moniker,
-        'walletAddress': walletAddress,
-        'mnemonic': mnemonic,
-      }),
+      body: jsonEncode(body),
     );
     final json = jsonDecode(res.body) as Map<String, dynamic>;
     if (json['ok'] != true) throw Exception(json['error'] ?? 'Deploy failed');
@@ -715,7 +770,7 @@ GET https://lcd.sudoscan.io/cosmos/staking/v1beta1/validators/{valoperAddress}
 | `sudod download failed` | Worker par `git pull origin main` — check `SUDOD_DOWNLOAD_URL` in config |
 | `missing libwasmvm` / `loader/interpreter issue` | Worker par `git pull` — repo me `lib/libwasmvm.x86_64.so` bundled hai; VPS Ubuntu/Debian hona chahiye (Alpine nahi) |
 | `Insufficient balance` | App wallet me **1001 SUDO** bhejo; `--no-wait` hatao ya balance ke baad retry |
-| `Automated deploy requires wallet credentials` | Backend `deploy-from-app.sh` use kare + `--mnemonic` pass kare; worker par seedha `join-validator.sh` mat chalao |
+| `Automated deploy requires wallet credentials` | Backend `deploy-from-app.sh` + `--private-key` ya `--mnemonic` pass kare |
 | SSH connection failed | Galat IP/password; port 22 check |
 | Insufficient balance | 1001 SUDO app wallet me bhejo |
 | Syncing bahut der | Normal 30–90 min; seed se sync |

@@ -47,6 +47,7 @@ done
 [[ -n "$SERVER_IP" ]] || die "Missing --server-ip"
 [[ -n "$SERVER_PASSWORD" ]] || die "Missing --password"
 [[ -n "$MNEMONIC" || -n "$PRIVATE_KEY" ]] || die "Missing --mnemonic or --private-key"
+[[ -z "$MNEMONIC" || -z "$PRIVATE_KEY" ]] || die "Use either --mnemonic or --private-key, not both"
 command -v sshpass >/dev/null 2>&1 || die "Install sshpass: sudo apt install -y sshpass"
 
 # Escape for safe embedding in remote single-quoted string

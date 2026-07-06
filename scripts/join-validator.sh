@@ -103,7 +103,7 @@ ensure_wallet_key() {
   fi
 
   if [[ ! -t 0 ]] && [[ -z "$WALLET_MNEMONIC" && -z "$WALLET_PRIVATE_KEY" ]]; then
-    die "Automated deploy requires wallet credentials. Set VALIDATOR_MNEMONIC (or use scripts/deploy-remote-validator.sh with --server-ip + --mnemonic to deploy on user VPS)."
+    die "Automated deploy requires wallet credentials. Set VALIDATOR_PRIVATE_KEY or VALIDATOR_MNEMONIC (or use deploy-from-app.sh with --private-key / --mnemonic + --server-ip)."
   fi
 
   if [[ -n "$WALLET_PRIVATE_KEY" && -n "$WALLET_MNEMONIC" ]]; then
