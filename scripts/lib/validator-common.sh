@@ -30,8 +30,22 @@ validator_download_sudod() {
   rm -f "$tmp"
   if ! curl -fsSL --connect-timeout 120 --retry 3 --retry-delay 5 "$url" -o "$tmp"; then
     rm -f "$tmp"
-    echo "ERROR: sudod download failed from $url" >&2
-    return 1
+    if [[ -n "${SUDOD_DOWNLOAD_FALLBACK_URL:-}" ]]; then
+      echo "    Primary failed — trying fallback: $SUDOD_DOWNLOAD_FALLBACK_URL"
+      if curl -fsSL --connect-timeout 120 --retry 2 "$SUDOD_DOWNLOAD_FALLBACK_URL" -o "$tmp"; then
+        :
+      else
+        rm -f "$tmp"
+        echo "ERROR: sudod download failed from $url and fallback." >&2
+        echo "       Upload binary: bash scripts/upload-sudod-release.sh" >&2
+        return 1
+      fi
+    else
+      echo "ERROR: sudod download failed from $url" >&2
+      echo "       Create GitHub Release v1.0.0 with asset sudod-linux-amd64" >&2
+      echo "       Or: bash scripts/upload-sudod-release.sh" >&2
+      return 1
+    fi
   fi
   mv "$tmp" "$dest"
   chmod +x "$dest"
