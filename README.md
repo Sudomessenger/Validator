@@ -166,9 +166,8 @@ export MONIKER=my-validator
 | Variable | Description |
 |----------|-------------|
 | `VALIDATOR_HOME` | Node data directory (default: `/opt/sudo-validator`) |
-| `SUDOD_BIN` | Path to pre-built `sudod` binary (skip build) |
-| `SUDO_CHAIN_SRC` | Path to existing chain source with `go.mod` |
-| `SUDO_CHAIN_REPO_URL` | Chain repo URL (default: Sudomessenger/network) |
+| `SUDOD_DOWNLOAD_URL` | Pre-built binary URL (default: GitHub Release) |
+| `SUDOD_BIN` | Path to existing sudod (skip download) |
 | `EXTERNAL_IP` | Force advertised P2P address |
 | `INSTALL_SYSTEMD` | `1` (default) or `0` to skip systemd |
 | `WAIT_FOR_FUNDS` | `1` (default) — wait for wallet funding |
@@ -320,7 +319,8 @@ See [docs/VALIDATOR_DEPLOY.md](docs/VALIDATOR_DEPLOY.md) for the full deployment
 | [Sudomessenger/network](https://github.com/Sudomessenger/network) | SUDO chain source (`sudod` binary) |
 | [sudoscan.io](https://sudoscan.io) | Block explorer |
 
-This repository clones the network repo automatically to build `sudod`. You do not need to clone it separately unless you want a custom build path (`SUDO_CHAIN_SRC`).
+This repository is **standalone** — it does **not** clone `Sudomessenger/network`.  
+The `sudod` node binary is downloaded from [GitHub Releases](https://github.com/Sudomessenger/Validator/releases).
 
 ---
 
