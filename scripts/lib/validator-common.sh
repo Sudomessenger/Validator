@@ -1253,17 +1253,42 @@ EOF
   echo "==> systemd: sudo-validator enabled + started"
 }
 
-validator_print_success() {
+validator_is_bonded_on_chain() {
   local binary="$1"
   local home="$2"
-  local wallet valoper node_id
-  wallet="$("$binary" keys show validator -a --home "$home" --keyring-backend "${KEYRING_BACKEND:-file}")"
-  valoper="$("$binary" keys show validator --bech val -a --home "$home" --keyring-backend "${KEYRING_BACKEND:-file}")"
-  node_id="$("$binary" tendermint show-node-id --home "$home")"
-  cat <<EOF
+  local key_name="${3:-validator}"
+  local valoper
+  valoper="$("$binary" keys show "$key_name" --bech val -a --home "$home" \
+    --keyring-backend "${KEYRING_BACKEND:-test}" 2>/dev/null)" || return 1
+  local lcd="${PUBLIC_LCD:-https://lcd.sudoscan.io}"
+  local status
+  status="$(curl -sf "${lcd}/cosmos/staking/v1beta1/validators/${valoper}" 2>/dev/null \
+    | jq -r '.validator.status // empty')" || status=""
+  [[ "$status" == "BOND_STATUS_BONDED" || "$status" == "BOND_STATUS_UNBONDING" ]]
+}
+
+validator_print_final_status() {
+  local binary="$1"
+  local home="$2"
+  local state="${3:-unknown}"
+  local wallet valoper node_id bonded=0
+  wallet="$("$binary" keys show validator -a --home "$home" --keyring-backend "${KEYRING_BACKEND:-test}" 2>/dev/null \
+    || "$binary" keys show validator -a --home "$home" --keyring-backend "${KEYRING_BACKEND:-file}" 2>/dev/null \
+    || echo "?")"
+  valoper="$("$binary" keys show validator --bech val -a --home "$home" --keyring-backend "${KEYRING_BACKEND:-test}" 2>/dev/null \
+    || "$binary" keys show validator --bech val -a --home "$home" --keyring-backend "${KEYRING_BACKEND:-file}" 2>/dev/null \
+    || echo "?")"
+  node_id="$("$binary" tendermint show-node-id --home "$home" 2>/dev/null || echo "?")"
+  if validator_is_bonded_on_chain "$binary" "$home"; then
+    bonded=1
+    state="bonded"
+  fi
+
+  if [[ "$bonded" == "1" ]]; then
+    cat <<EOF
 
 ╔══════════════════════════════════════════════════════════════╗
-║           SUDO VALIDATOR ACTIVE                              ║
+║           SUDO VALIDATOR BONDED (ACTIVE)                     ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  Wallet:    $wallet
 ║  Valoper:   $valoper
@@ -1271,9 +1296,26 @@ validator_print_success() {
 ║  Stake:     ${STAKE_SUDO} SUDO
 ║  Explorer:  https://sudoscan.io/validators
 ╚══════════════════════════════════════════════════════════════╝
-
-Your validator will appear in block production when selected.
-Gas fees from transactions are distributed to validators automatically.
+DEPLOY_STATUS=validator_bonded
 
 EOF
+  else
+    cat <<EOF
+
+╔══════════════════════════════════════════════════════════════╗
+║           SUDO NODE RUNNING — NOT BONDED YET                 ║
+╠══════════════════════════════════════════════════════════════╣
+║  Wallet:    $wallet
+║  Valoper:   $valoper
+║  Node ID:   $node_id
+║  Action:    bash scripts/register-validator-now.sh
+╚══════════════════════════════════════════════════════════════╝
+DEPLOY_STATUS=node_running_not_bonded
+
+EOF
+  fi
+}
+
+validator_print_success() {
+  validator_print_final_status "$1" "$2" "bonded"
 }

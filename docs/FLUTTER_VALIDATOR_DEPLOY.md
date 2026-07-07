@@ -266,6 +266,36 @@ Authorization: Bearer <user_jwt>
 
 Poll har **15–30 sec** jab tak `active` ya `failed` na ho.
 
+**App ko sirf systemd / "VALIDATOR ACTIVE" log mat dekho** — node chal sakta hai lekin bonded nahi.
+
+Backend VPS par ye script chalake sahi status lo:
+
+```bash
+bash /opt/validator-worker/scripts/validator-status-json.sh
+```
+
+Example output:
+
+```json
+{
+  "deploy_status": "node_running_not_bonded",
+  "node_running": true,
+  "synced": true,
+  "bonded": false,
+  "wallet": "99guppz...",
+  "valoper": "99valoper1..."
+}
+```
+
+| `deploy_status` | App UI |
+|-----------------|--------|
+| `node_syncing` | Syncing blocks... |
+| `node_running_not_bonded` | Node running — registering validator... (ya Retry register) |
+| `validator_bonded` | Active ✅ |
+| `node_stopped` | Failed / stopped |
+
+Bonded confirm: LCD `validator.status == BOND_STATUS_BONDED` (see below).
+
 ---
 
 ## Backend implementation (server-side)

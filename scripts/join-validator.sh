@@ -295,7 +295,17 @@ main() {
 
   if [[ "$already_registered" == "0" ]]; then
     if ! validator_is_registered "$BINARY" "$VALIDATOR_HOME"; then
-      echo "WARN: Validator not bonded yet — check: tail -50 $VALIDATOR_HOME/node.log"
+      echo "==> Validator not bonded — retrying create-validator after sync..."
+      if validator_register "$BINARY" "$VALIDATOR_HOME" "$MONIKER"; then
+        sleep 10
+      fi
+      if ! validator_is_registered "$BINARY" "$VALIDATOR_HOME"; then
+        echo "ERROR: Validator NOT bonded on-chain (node is synced but create-validator failed)." >&2
+        echo "       Fix: bash $ROOT_DIR/scripts/register-validator-now.sh" >&2
+        echo "DEPLOY_STATUS=node_running_not_bonded"
+        validator_print_final_status "$BINARY" "$VALIDATOR_HOME" "not_bonded"
+        exit 1
+      fi
     fi
   fi
 
@@ -310,7 +320,7 @@ main() {
     echo "    Logs: $VALIDATOR_HOME/node.log"
   fi
 
-  validator_print_success "$BINARY" "$VALIDATOR_HOME"
+  validator_print_final_status "$BINARY" "$VALIDATOR_HOME" "bonded"
 }
 
 main "$@"
