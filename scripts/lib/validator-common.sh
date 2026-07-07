@@ -944,7 +944,7 @@ path, interval, keep_recent = sys.argv[1:4]
 text = open(path).read()
 
 def upsert_section(text, section, values):
-    pattern = rf'(\[{re.escape(section)}\][^\[]*)'
+    pattern = rf'\[{re.escape(section)}\]([^\[]*)'
     m = re.search(pattern, text, flags=re.S)
     body = ""
     if m:

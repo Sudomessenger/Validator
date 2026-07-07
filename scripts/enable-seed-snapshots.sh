@@ -2,10 +2,12 @@
 # Run ONCE on the SEED server (170.64.178.165) to enable snapshot creation.
 # New validator deploys use state sync (~5-15 min) instead of block sync (hours).
 #
-# Usage (on seed server):
-#   cd /opt/validator-worker   # or wherever Validator repo is cloned
+# Usage (on seed server — hostname sudochain / 170.64.178.165):
+#   cd /root/Validator
 #   git pull origin main
-#   bash scripts/enable-seed-snapshots.sh
+#   SEED_HOME=/tmp/sudo-localnet bash scripts/enable-seed-snapshots.sh
+#
+# Note: /opt/validator-worker is the DEPLOY WORKER, not the seed server.
 #
 # Optional env:
 #   SEED_HOME=/tmp/sudo-localnet
@@ -58,24 +60,47 @@ if systemctl is-active --quiet sudo-validator 2>/dev/null; then
   systemctl restart sudo-validator
   sleep 8
   systemctl status sudo-validator --no-pager | head -10 || true
-elif command -v pm2 >/dev/null 2>&1 && pm2 describe sudod >/dev/null 2>&1; then
-  pm2 restart sudod
-  sleep 8
+elif command -v pm2 >/dev/null 2>&1; then
+  pm2_name=""
+  for candidate in sudo-chain sudod sudo-validator; do
+    if pm2 describe "$candidate" >/dev/null 2>&1; then
+      pm2_name="$candidate"
+      break
+    fi
+  done
+  if [[ -n "$pm2_name" ]]; then
+    echo "    Restarting pm2 process: $pm2_name (stop → wait → start)"
+    pm2 stop "$pm2_name"
+    sleep 5
+    pkill -f "sudod start --home ${SEED_HOME}" 2>/dev/null || true
+    sleep 2
+    pm2 start "$pm2_name"
+    sleep 12
+  else
+    echo "    WARN: No sudo-chain/sudod pm2 process found."
+    echo "    Restart sudod manually so snapshot-interval takes effect."
+  fi
 else
   echo "    WARN: No sudo-validator systemd/pm2 service found."
   echo "    Restart sudod manually so snapshot-interval takes effect."
 fi
 
 echo "==> 4/4 Verify (snapshots appear after ~$INTERVAL blocks)..."
-sleep 3
-if curl -sf --max-time 10 "http://127.0.0.1:26657/status" >/tmp/seed-status.json 2>/dev/null; then
-  python3 -c "
+sleep 5
+rpc_ok=0
+for endpoint in "http://127.0.0.1:26657" "http://[::1]:26657"; do
+  if curl -sf --max-time 10 "${endpoint}/status" >/tmp/seed-status.json 2>/dev/null; then
+    python3 -c "
 import json
 s=json.load(open('/tmp/seed-status.json'))['result']['sync_info']
-print('  Seed height:', s['latest_block_height'], '| catching_up:', s['catching_up'])
+print('  Seed RPC OK ('${endpoint#'http://'}') height:', s['latest_block_height'], '| catching_up:', s['catching_up'])
 "
-else
-  echo "    WARN: Seed RPC not responding on :26657"
+    rpc_ok=1
+    break
+  fi
+done
+if [[ "$rpc_ok" == "0" ]]; then
+  echo "    WARN: Seed RPC not responding yet — check: pm2 logs sudo-chain --lines 30"
 fi
 
 if [[ -d "$SEED_HOME/data/snapshots" ]]; then

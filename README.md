@@ -179,13 +179,14 @@ export MONIKER=my-validator
 
 New validators use **state sync** (~5–15 min) instead of block sync (30–90+ min, grows with chain size).
 
-**One-time on seed server** (`170.64.178.165`):
+**One-time on seed server** (`170.64.178.165` / hostname `sudochain`):
 
 ```bash
-git clone https://github.com/Sudomessenger/Validator.git /opt/validator-worker
-cd /opt/validator-worker && git pull origin main
-bash scripts/enable-seed-snapshots.sh
+cd /root/Validator && git pull origin main
+SEED_HOME=/tmp/sudo-localnet bash scripts/enable-seed-snapshots.sh
 ```
+
+> `/opt/validator-worker` is the **deploy worker** — not the seed. Seed chain runs via pm2 `sudo-chain` at `/tmp/sudo-localnet`.
 
 After ~1000 blocks, seed serves snapshots. All new deploys auto-use state sync.
 
