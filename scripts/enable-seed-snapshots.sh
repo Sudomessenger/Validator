@@ -90,11 +90,13 @@ sleep 5
 rpc_ok=0
 for endpoint in "http://127.0.0.1:26657" "http://[::1]:26657"; do
   if curl -sf --max-time 10 "${endpoint}/status" >/tmp/seed-status.json 2>/dev/null; then
-    python3 -c "
-import json
-s=json.load(open('/tmp/seed-status.json'))['result']['sync_info']
-print('  Seed RPC OK ('${endpoint#'http://'}') height:', s['latest_block_height'], '| catching_up:', s['catching_up'])
-"
+    endpoint_label="${endpoint#http://}"
+    python3 - "$endpoint_label" <<'PY'
+import json, sys
+s = json.load(open("/tmp/seed-status.json"))["result"]["sync_info"]
+label = sys.argv[1]
+print(f"  Seed RPC OK ({label}) height: {s['latest_block_height']} | catching_up: {s['catching_up']}")
+PY
     rpc_ok=1
     break
   fi
