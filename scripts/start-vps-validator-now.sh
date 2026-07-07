@@ -34,7 +34,10 @@ validator_configure_node \
   "$VALIDATOR_HOME/config/app.toml" \
   "$PEER" \
   "$(validator_detect_public_ip)"
-validator_disable_statesync "$VALIDATOR_HOME/config/config.toml"
+STATE_SYNC_ACTIVE=0
+if validator_configure_statesync "$VALIDATOR_HOME/config/config.toml"; then
+  STATE_SYNC_ACTIVE=1
+fi
 validator_reset_chain_data "$BINARY" "$VALIDATOR_HOME"
 
 if [[ ! -f /etc/systemd/system/sudo-validator.service ]]; then

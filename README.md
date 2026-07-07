@@ -150,6 +150,8 @@ First run downloads pre-built `sudod` from GitHub Release (~90 MB, 1–3 min). *
 | `SEED_P2P_PORT` | `26656` | P2P port |
 | `PUBLIC_RPC` | `https://rpc.sudoscan.io` | Public RPC endpoint |
 | `PUBLIC_TX_NODE` | `tcp://170.64.178.165:26657` | Tx broadcast node |
+| `USE_STATE_SYNC` | `1` | Fast sync via state snapshots (~5–15 min) |
+| `STATE_SYNC_TRUST_OFFSET` | `2000` | Blocks behind tip for trust height |
 | `STAKE_SUDO` | `1000` | Self-delegation amount |
 | `FEE_BUFFER_SUDO` | `1` | Extra SUDO reserved for fees |
 
@@ -171,6 +173,23 @@ export MONIKER=my-validator
 | `EXTERNAL_IP` | Force advertised P2P address |
 | `INSTALL_SYSTEMD` | `1` (default) or `0` to skip systemd |
 | `WAIT_FOR_FUNDS` | `1` (default) — wait for wallet funding |
+| `USE_STATE_SYNC` | `1` (default) — state sync; `0` = slow block sync from genesis |
+
+### State sync (fast deploy — default)
+
+New validators use **state sync** (~5–15 min) instead of block sync (30–90+ min, grows with chain size).
+
+**One-time on seed server** (`170.64.178.165`):
+
+```bash
+git clone https://github.com/Sudomessenger/Validator.git /opt/validator-worker
+cd /opt/validator-worker && git pull origin main
+bash scripts/enable-seed-snapshots.sh
+```
+
+After ~1000 blocks, seed serves snapshots. All new deploys auto-use state sync.
+
+Fallback: if RPC/trust fetch fails, deploy script falls back to block sync automatically.
 
 ---
 

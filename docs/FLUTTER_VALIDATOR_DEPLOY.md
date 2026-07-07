@@ -146,7 +146,7 @@ Validation:
 - `Installing libwasmvm (CosmWasm library)...`
 - `Downloading sudod binary...`
 - `Registering validator...`
-- `Syncing blocks (30–90 min)...`
+- `Syncing blocks (5–15 min)...` (state sync — default)
 - `Active ✅`
 
 ### Screen 5 — My Validator
@@ -259,7 +259,7 @@ Authorization: Bearer <user_jwt>
 | `connecting` | Connecting to your server... |
 | `installing` | Installing on VPS... |
 | `registering` | Registering validator... |
-| `syncing` | Syncing blocks (please wait)... |
+| `syncing` | Syncing blocks (~5–15 min state sync)... |
 | `active` | Validator active ✅ |
 | `jailed` | Validator jailed — fixing... |
 | `failed` | Deploy failed ❌ |
@@ -821,7 +821,7 @@ Logs: `tail -f /opt/sudo-validator/watchdog.log`
 | `Automated deploy requires wallet credentials` | Backend `deploy-from-app.sh` + `--private-key` ya `--mnemonic` pass kare |
 | SSH connection failed | Galat IP/password; port 22 check |
 | Insufficient balance | 1001 SUDO app wallet me bhejo |
-| Syncing bahut der | Normal 30–90 min; seed se sync |
+| Syncing bahut der | Default state sync ~5–15 min. Agar block sync fallback ho to 30–90+ min. Seed par `bash scripts/enable-seed-snapshots.sh` chalao (ek baar) |
 | Validator jailed | VPS: `bash scripts/unjail-validator.sh` |
 | Deploy stuck | Backend logs + VPS: `tail -f /opt/sudo-validator/node.log` |
 

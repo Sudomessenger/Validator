@@ -576,8 +576,14 @@ validator_load_network_defaults() {
   SEED_IP="${SEED_IP:-170.64.178.165}"
   SEED_P2P_PORT="${SEED_P2P_PORT:-26656}"
   PUBLIC_RPC="${PUBLIC_RPC:-https://rpc.sudoscan.io}"
+  PUBLIC_TX_NODE="${PUBLIC_TX_NODE:-tcp://170.64.178.165:26657}"
   STAKE_SUDO="${STAKE_SUDO:-1000}"
   FEE_BUFFER_SUDO="${FEE_BUFFER_SUDO:-1}"
+  USE_STATE_SYNC="${USE_STATE_SYNC:-1}"
+  STATE_SYNC_TRUST_OFFSET="${STATE_SYNC_TRUST_OFFSET:-2000}"
+  STATE_SYNC_TRUST_PERIOD="${STATE_SYNC_TRUST_PERIOD:-168h0m0s}"
+  STATE_SYNC_SNAPSHOT_INTERVAL="${STATE_SYNC_SNAPSHOT_INTERVAL:-1000}"
+  STATE_SYNC_SNAPSHOT_KEEP="${STATE_SYNC_SNAPSHOT_KEEP:-5}"
 }
 
 validator_load_deploy_env() {
@@ -763,14 +769,203 @@ validator_fetch_live_genesis() {
   return 1
 }
 
+validator_normalize_rpc_http() {
+  local raw="${1:?}"
+  raw="${raw#tcp://}"
+  raw="${raw#http://}"
+  raw="${raw#https://}"
+  raw="${raw%/}"
+  if [[ "$raw" == *:* ]]; then
+    printf 'http://%s\n' "$raw"
+  else
+    printf 'http://%s:26657\n' "$raw"
+  fi
+}
+
+validator_build_state_sync_rpc_servers() {
+  local servers=()
+  local s seen="" out=""
+
+  if [[ -n "${STATE_SYNC_RPC_SERVERS:-}" ]]; then
+    printf '%s\n' "$STATE_SYNC_RPC_SERVERS"
+    return 0
+  fi
+
+  if [[ -n "${PUBLIC_TX_NODE:-}" ]]; then
+    servers+=("$(validator_normalize_rpc_http "$PUBLIC_TX_NODE")")
+  fi
+  if [[ -n "${SEED_IP:-}" ]]; then
+    servers+=("$(validator_normalize_rpc_http "${SEED_IP}:26657")")
+  fi
+  if [[ -n "${PUBLIC_RPC:-}" ]]; then
+    servers+=("$(validator_normalize_rpc_http "$PUBLIC_RPC")")
+  fi
+
+  for s in "${servers[@]}"; do
+    [[ -n "$s" ]] || continue
+    if [[ ",$seen," != *",$s,"* ]]; then
+      seen="${seen:+$seen,}$s"
+      out="${out:+$out,}$s"
+    fi
+  done
+
+  if [[ -z "$out" ]]; then
+    return 1
+  fi
+
+  # CometBFT state sync needs 2 RPC endpoints for light-client verification.
+  if [[ "$out" != *","* ]]; then
+    out="${out},${out}"
+  fi
+
+  printf '%s\n' "$out"
+}
+
+validator_fetch_state_sync_trust() {
+  local rpc_url="${1:?}"
+  local offset="${2:-2000}"
+  local status_json height trust_height block_json trust_hash
+
+  status_json="$(curl -sf --max-time 25 "${rpc_url}/status" 2>/dev/null)" || return 1
+  height="$(printf '%s' "$status_json" | jq -r '.result.sync_info.latest_block_height // empty')"
+  [[ -n "$height" && "$height" != "null" && "$height" -gt 0 ]] || return 1
+
+  trust_height=$((height - offset))
+  if [[ "$trust_height" -lt 1 ]]; then
+    trust_height=1
+  fi
+
+  block_json="$(curl -sf --max-time 25 "${rpc_url}/block?height=${trust_height}" 2>/dev/null)" || return 1
+  trust_hash="$(printf '%s' "$block_json" | jq -r '.result.block_id.hash // empty')"
+  [[ -n "$trust_hash" && "$trust_hash" != "null" ]] || return 1
+
+  printf '%s %s %s\n' "$trust_height" "$trust_hash" "$height"
+}
+
+validator_write_statesync_config() {
+  local config="${1:?}"
+  local enable="${2:?}"
+  local rpc_servers="${3:-}"
+  local trust_height="${4:-0}"
+  local trust_hash="${5:-}"
+  local trust_period="${6:-168h0m0s}"
+
+  python3 - "$config" "$enable" "$rpc_servers" "$trust_height" "$trust_hash" "$trust_period" <<'PY'
+import re, sys
+
+path, enable, rpc_servers, trust_height, trust_hash, trust_period = sys.argv[1:7]
+text = open(path).read()
+
+def upsert_section_kv(text, section, values):
+    pattern = rf'(\[{re.escape(section)}\][^\[]*)'
+    m = re.search(pattern, text, flags=re.S)
+    body = ""
+    if m:
+        body = m.group(1)
+        text = text[:m.start()] + text[m.end():]
+    else:
+        body = "\n"
+    for key, val in values.items():
+        line = f'{key} = "{val}"' if key in ("rpc_servers", "trust_hash", "trust_period") else f"{key} = {val}"
+        if re.search(rf'^{re.escape(key)} =', body, flags=re.M):
+            body = re.sub(rf'^{re.escape(key)} =.*$', line, body, count=1, flags=re.M)
+        else:
+            body = body.rstrip() + "\n" + line + "\n"
+    return text.rstrip() + f"\n\n[{section}]\n" + body.lstrip()
+
+values = {
+    "enable": enable,
+    "rpc_servers": rpc_servers,
+    "trust_height": trust_height,
+    "trust_hash": trust_hash,
+    "trust_period": trust_period,
+}
+text = upsert_section_kv(text, "statesync", values)
+open(path, "w").write(text + "\n")
+PY
+}
+
 validator_disable_statesync() {
   local config="${1:?}"
-  python3 - "$config" <<'PY'
+  validator_write_statesync_config "$config" "false" "" "0" "" "168h0m0s"
+}
+
+# Returns 0 when state sync is configured; 1 to fall back to block sync.
+validator_configure_statesync() {
+  local config="${1:?}"
+  local use_ss="${USE_STATE_SYNC:-1}"
+
+  if [[ "$use_ss" != "1" ]]; then
+    validator_disable_statesync "$config"
+    echo "==> Sync mode: block sync (USE_STATE_SYNC=0)"
+    return 1
+  fi
+
+  local rpc_servers primary_rpc trust_info trust_height trust_hash chain_height trust_period offset
+  rpc_servers="$(validator_build_state_sync_rpc_servers)" || {
+    echo "WARN: No RPC servers for state sync — falling back to block sync" >&2
+    validator_disable_statesync "$config"
+    return 1
+  }
+
+  primary_rpc="${rpc_servers%%,*}"
+  offset="${STATE_SYNC_TRUST_OFFSET:-2000}"
+  trust_period="${STATE_SYNC_TRUST_PERIOD:-168h0m0s}"
+
+  trust_info="$(validator_fetch_state_sync_trust "$primary_rpc" "$offset")" || {
+    echo "WARN: Could not fetch trust block from $primary_rpc — falling back to block sync" >&2
+    validator_disable_statesync "$config"
+    return 1
+  }
+
+  trust_height="${trust_info%% *}"
+  trust_info="${trust_info#* }"
+  trust_hash="${trust_info%% *}"
+  chain_height="${trust_info#* }"
+
+  validator_write_statesync_config \
+    "$config" "true" "$rpc_servers" "$trust_height" "$trust_hash" "$trust_period"
+
+  echo "==> Sync mode: state sync (~5-15 min)"
+  echo "    chain_height=$chain_height trust_height=$trust_height"
+  echo "    rpc_servers=$rpc_servers"
+  return 0
+}
+
+validator_enable_seed_snapshots() {
+  local app_toml="${1:?}"
+  local interval="${2:-1000}"
+  local keep_recent="${3:-5}"
+
+  python3 - "$app_toml" "$interval" "$keep_recent" <<'PY'
 import re, sys
-path = sys.argv[1]
+
+path, interval, keep_recent = sys.argv[1:4]
 text = open(path).read()
-text = re.sub(r'(\[statesync\][\s\S]*?)^enable = true', r'\1enable = false', text, count=1, flags=re.M)
-open(path, 'w').write(text)
+
+def upsert_section(text, section, values):
+    pattern = rf'(\[{re.escape(section)}\][^\[]*)'
+    m = re.search(pattern, text, flags=re.S)
+    body = ""
+    if m:
+        body = m.group(1)
+        text = text[:m.start()] + text[m.end():]
+    else:
+        body = "\n"
+    for key, val in values.items():
+        line = f"{key} = {val}"
+        if re.search(rf'^{re.escape(key)} =', body, flags=re.M):
+            body = re.sub(rf'^{re.escape(key)} =.*$', line, body, count=1, flags=re.M)
+        else:
+            body = body.rstrip() + "\n" + line + "\n"
+    return text.rstrip() + f"\n\n[{section}]\n" + body.lstrip()
+
+values = {
+    "snapshot-interval": interval,
+    "snapshot-keep-recent": keep_recent,
+}
+text = upsert_section(text, "state-sync", values)
+open(path, "w").write(text + "\n")
 PY
 }
 

@@ -202,7 +202,11 @@ setup_node() {
     "$VALIDATOR_HOME/config/app.toml" \
     "$peer" \
     "$ext_ip"
-  validator_disable_statesync "$VALIDATOR_HOME/config/config.toml"
+  STATE_SYNC_ACTIVE=0
+  if validator_configure_statesync "$VALIDATOR_HOME/config/config.toml"; then
+    STATE_SYNC_ACTIVE=1
+  fi
+  export STATE_SYNC_ACTIVE
 
   echo "==> Node configured | peer=$peer | external=${ext_ip:-auto}"
 }
@@ -267,12 +271,16 @@ main() {
 
   export KEYRING_BACKEND
 
-  if [[ "$already_registered" == "1" ]]; then
+  if [[ "$already_registered" == "1" || "${STATE_SYNC_ACTIVE:-0}" == "1" ]]; then
     validator_reset_chain_data "$BINARY" "$VALIDATOR_HOME"
   fi
 
   echo ""
-  echo "==> Step 1/4: Starting node (block sync from seed)..."
+  if [[ "${STATE_SYNC_ACTIVE:-0}" == "1" ]]; then
+    echo "==> Step 1/4: Starting node (state sync — ~5-15 min)..."
+  else
+    echo "==> Step 1/4: Starting node (block sync from seed — may take 30-90+ min)..."
+  fi
   validator_start_node_bg "$BINARY" "$VALIDATOR_HOME"
 
   if [[ "$already_registered" == "0" ]]; then
@@ -284,8 +292,14 @@ main() {
     fi
   fi
 
-  echo "==> Step 3/4: Waiting for block sync (may take 30-90 min)..."
-  if ! validator_wait_for_sync "$RPC_PORT" "${SYNC_MAX_WAIT:-7200}"; then
+  if [[ "${STATE_SYNC_ACTIVE:-0}" == "1" ]]; then
+    echo "==> Step 3/4: Waiting for state sync (~5-15 min)..."
+    sync_wait="${SYNC_MAX_WAIT:-1800}"
+  else
+    echo "==> Step 3/4: Waiting for block sync (may take 30-90+ min)..."
+    sync_wait="${SYNC_MAX_WAIT:-7200}"
+  fi
+  if ! validator_wait_for_sync "$RPC_PORT" "$sync_wait"; then
     echo ""
     echo "ERROR: Node failed to start or sync."
     echo "  Check logs: tail -50 $VALIDATOR_HOME/node.log"
