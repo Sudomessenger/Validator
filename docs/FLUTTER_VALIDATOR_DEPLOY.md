@@ -769,7 +769,25 @@ GET https://lcd.sudoscan.io/cosmos/staking/v1beta1/validators/{valoperAddress}
 
 ---
 
-## VPS requirements (user ko app me dikhao)
+## Validator 24/7 sync (default)
+
+Har deploy par automatically:
+
+| Feature | Kya karta hai |
+|---------|----------------|
+| **systemd `sudo-validator`** | Node 24/7 chalta hai, crash pe auto-restart (`Restart=always`) |
+| **sync watchdog timer** | Har **5 min** check — RPC down / sync stall / zyada lag → auto-restart |
+
+Existing VPS par enable karo:
+
+```bash
+cd /opt/validator-worker && git pull origin main
+bash scripts/enable-sync-watchdog.sh
+```
+
+Logs: `tail -f /opt/sudo-validator/watchdog.log`
+
+> Validator node **band mat karo** — systemd + watchdog sync maintain karte hain. Node band = tum miss karte ho, chain nahi rukti.
 
 | Item | Value |
 |------|-------|

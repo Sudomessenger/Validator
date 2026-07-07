@@ -1225,32 +1225,66 @@ validator_install_systemd() {
   local binary="$1"
   local home="$2"
   local service="/etc/systemd/system/sudo-validator.service"
-  echo "==> Installing systemd service..."
+  local watch_svc="/etc/systemd/system/sudo-validator-sync-watch.service"
+  local watch_timer="/etc/systemd/system/sudo-validator-sync-watch.timer"
+  local repo_root="${REPO_ROOT:-$(dirname "$(dirname "${BASH_SOURCE[0]}")")}"
+  echo "==> Installing systemd service (24/7 auto-restart + sync watchdog)..."
   sudo tee "$service" >/dev/null <<EOF
 [Unit]
 Description=SUDO Validator (sudo99)
 After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=${SUDO_USER:-root}
 Environment=LD_LIBRARY_PATH=${SUDO_LIB_DIR}
+Environment=VALIDATOR_HOME=${home}
 ExecStart=${binary} start --home ${home}
 Restart=always
-RestartSec=5
+RestartSec=10
 LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
 EOF
+  sudo chmod +x "${repo_root}/scripts/validator-sync-watchdog.sh" 2>/dev/null || true
+  sudo tee "$watch_svc" >/dev/null <<EOF
+[Unit]
+Description=SUDO Validator sync watchdog
+After=network-online.target sudo-validator.service
+
+[Service]
+Type=oneshot
+Environment=VALIDATOR_HOME=${home}
+Environment=PUBLIC_LCD=${PUBLIC_LCD:-https://lcd.sudoscan.io}
+ExecStart=/bin/bash ${repo_root}/scripts/validator-sync-watchdog.sh
+EOF
+  sudo tee "$watch_timer" >/dev/null <<EOF
+[Unit]
+Description=Run SUDO validator sync watchdog every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
   sudo systemctl daemon-reload
   sudo systemctl enable sudo-validator
+  sudo systemctl enable sudo-validator-sync-watch.timer
   if validator_node_running "$home"; then
     kill "$(cat "$home/node.pid")" 2>/dev/null || true
     sleep 2
   fi
   sudo systemctl restart sudo-validator
-  echo "==> systemd: sudo-validator enabled + started"
+  sudo systemctl start sudo-validator-sync-watch.timer
+  echo "==> systemd: sudo-validator enabled (Restart=always)"
+  echo "==> watchdog: sudo-validator-sync-watch.timer every 5 min"
 }
 
 validator_is_bonded_on_chain() {
